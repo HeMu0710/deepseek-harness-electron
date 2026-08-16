@@ -4,7 +4,7 @@
 
 DeepSeek Harness Electron 是基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 独立维护的 Electron 桌面 GUI。本公开 fork 保留上游的插件化 agent 运行时与 Web UI，并让 Harness Host 运行在 Electron utility process 中，通过本地 IPC 与 renderer 通信，不再依赖 loopback HTTP server。
 
-上游项目由 [DeepSeek AI](https://deepseek.com) 开发。本 fork 发布的 Release 产物由本项目独立维护，并非 DeepSeek AI 官方发行版本。
+上游项目由 [DeepSeek AI](https://deepseek.com) 开发。本 fork 由本项目独立维护，并非 DeepSeek AI 官方发行版本。
 
 ## 开发者预览
 
@@ -12,18 +12,11 @@ DeepSeek Harness Electron 是基于 [DeepSeek Harness](https://github.com/deepse
 
 ## 运行
 
-### 下载 macOS Release
+### 构建本地 macOS 应用
 
-已发布的 macOS 版本会作为 ZIP 附加到 [GitHub Releases](https://github.com/HeMu0710/deepseek-harness-electron/releases)。请根据 Mac 处理器下载对应文件：
+本项目目前不发布可下载的 macOS 应用压缩包。请在处理器与目标架构匹配的 Mac 上构建：Apple Silicon 生成 `arm64`，Intel 生成 `x64`。按照[打包 macOS 应用](#package-the-macos-application)创建本地应用与 ZIP。
 
-| Mac | Release 产物 |
-|---|---|
-| Apple Silicon（M1/M2/M3/M4 及后续型号） | `DeepSeek-Harness-darwin-arm64.zip` |
-| Intel | `DeepSeek-Harness-darwin-x64.zip` |
-
-打开 ZIP，将 `DeepSeek Harness.app` 移入 `/Applications`，再从该目录启动。每个 Release 可能提供其中一种或两种架构；本项目目前不生成 Universal 应用。
-
-只有包含经过 Developer ID 签名与 notarization 的应用的 ZIP 才适合直接公开分发。如果 Releases 页面没有适合当前架构的产物，请从源码运行或在本机打包。
+生成的应用使用 ad-hoc 签名，仅用于在构建所用的 Mac 上测试，并非经过 Developer ID 签名与 notarization 的公开发行版本。
 
 ### 从源码运行 Electron
 
@@ -59,6 +52,8 @@ pnpm dsh web
 
 命令会打印本地访问地址，默认为 `http://127.0.0.1:3080`。详见 [Web UI 指南](docs/user/guide/index.md)。
 
+<a id="package-the-macos-application"></a>
+
 ## 打包 macOS 应用
 
 打包需要一台运行目标架构的 Mac，以及 Xcode Command Line Tools。在仓库根目录运行：
@@ -74,7 +69,7 @@ pnpm package:mac
 .artifacts/electron/macos/DeepSeek-Harness-darwin-<arch>.zip
 ```
 
-默认生成的 ad-hoc ZIP 仅用于本机测试，在另一台 Mac 上可能被 Gatekeeper 拒绝。如需准备公开 GitHub Release，请分别在对应架构的 Mac 上构建 arm64 与 x64，配置 `Developer ID Application` 身份和 Apple notarization 凭据，再上传生成的架构专用 ZIP。不要把默认 ad-hoc 压缩包作为公开 Release 发布。
+ad-hoc ZIP 仅用于本机测试，在另一台 Mac 上可能被 Gatekeeper 拒绝。本项目目前不提供经过 Developer ID 签名与 notarization 的下载；不得把生成的压缩包作为公开 Release 发布。
 
 [macOS 打包教程](docs/cookbook/packaging-macos-app.md)详细说明前置条件、增量构建、ZIP 冒烟测试、Developer ID 签名、notarization 与独立签名校验。
 

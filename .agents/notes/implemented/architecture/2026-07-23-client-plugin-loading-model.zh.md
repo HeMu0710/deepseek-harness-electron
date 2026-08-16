@@ -4,7 +4,7 @@ Status: implemented
 
 [English](2026-07-23-client-plugin-loading-model.md) | 中文
 
-> 范围：浏览器侧的插件装载机件——什么是插件、代码怎么到达、热重载如何搭在这套模型上。装载链归本篇所有；[Web 客户端架构笔记](2026-07-19-gui-web-client-architecture.md) 在装载问题上以本篇为准，继续拥有 slot、数据对象层与 React 面。
+> 范围：浏览器侧的插件装载机件——什么是插件、代码怎么到达、热重载如何搭在这套模型上。装载链归本篇所有；[Web 客户端架构笔记](2026-07-19-gui-web-client-architecture.md) 在装载问题上以本篇为准，继续拥有 slot、数据对象层与 React 面。[Electron 桌面应用](2026-08-14-electron-ipc-desktop-application.md)持有非 Web 图与资源载体。
 
 ## Problem
 
@@ -66,8 +66,8 @@ vendored Loader 经其 `internal` 约定消费模块系统——唯一调用点�
 
 **host 侧——组合这张图。**
 
-1. 负责组合的 app（`apps/cli`）把名册作为普通行放进它的 `cordis.yml` 配置树——client 插件包与每个 host 插件一样是 entry 行，包括无条件挂载的 `client-hmr` 行。名册行 import 失败由 `assertEntriesLoaded` 捕获；fiber reject 的行则由 `assertEntriesActivated` 报告原始 stack（[host boot 决策](2026-07-24-web-config-tree-boot-and-transport-layering.md)）。
-2. `dsh-client-modules` 的 node 半（该包是双面的：浏览器半就是模块表）扫描 loader entry 的 package.json `dsh.client` 声明，组合出 `window.__DSH_BOOT__`：`{ rev, entries: [{ id, url, rev, inject?, immediately? }] }`。`inject` 边与 `immediately` 标记都来自 manifest，永不人肉抄写。它会拒绝没有已构建 `./client` bundle 的已声明插件，并把它们的 package/path 行归到一条源码构建要求下；畸形声明字段同样会让激活失败，host 检查会从 FAILED fiber 报告这两类错误。
+1. 共享 GUI 组合包把 roster 作为普通配置项放进其 patch 树；Client 插件包与每个 Host 插件一样是 entry。Web 表层另行添加 `client-hmr` 配置项，Electron 表层则省略它。roster 配置项 import 失败由 `assertEntriesLoaded` 捕获；fiber reject 的配置项则由 `assertEntriesActivated` 报告原始 stack（[Host boot 决策](2026-07-24-web-config-tree-boot-and-transport-layering.md)）。
+2. `dsh-client-modules` 的 Host 半（该包是双面的：浏览器半就是模块表）扫描 Loader entry 的 package.json `dsh.client` 声明，组合出 `window.__DSH_BOOT__`：`{ rev, entries: [{ id, url, rev, inject?, immediately? }] }`。`inject` 边与 `immediately` 标记都来自 manifest，永不人肉抄写。它会拒绝没有已构建 `./client` bundle 的已声明插件，并把它们的 package/path 配置项归到一条源码构建要求下；畸形声明字段同样会让激活失败，Host 检查会从 FAILED fiber 报告这两类错误。即使没有 `webServer`，该清单也保持 active：Web 条件挂载插件路由与 index tap，Electron 则为其私有 scheme 读取图和 bundle 路径。
 3. 扫描是单包增量——不存在全量重扫代码路径。每次 cordis `internal/plugin` 发射把该 fiber 的 entry 名标脏（无 entry 的 fiber O(1) 丢弃）；微任务 flush 把每个脏名对账 live loader entries，包元数据（含「非 client 包」的否定结论）按名永久缓存，bundle 重哈希只经 `rebuilt(id)` 可达。激活趟从当前 entries 灌同一脏集合并同步 flush，初扫与稳态共享一条实现。每个 bundle 的内容哈希是其 `rev`（缓存失效 + HMR diff 锚点），行集合哈希进 `graph.rev`，每一行都作为脚本资源供给：`/plugins/<id>/client.js?rev=…`，对应 sourcemap 位于同一路径加 `.map`。图类型单源在 modules 包的 `./client` 出口——webserver 对图一无所知（它是朴素路由注册插件；bundle 路由和 index 渲染 tap 都由 modules 自己注册）。
 
 为什么名册是 yml 行而不是扫描？因为哪些插件组合进一次部署是组合决策，不是包属性——一个在仓库中声明了 dsh.client 的包，不代表这次部署要挂载它，扫描发现无从替人做这个决定；node 半只扫描配置树实际挂载了的东西。
@@ -84,7 +84,7 @@ vendored Loader 经其 `internal` 约定消费模块系统——唯一调用点�
 
 ### 热重载：一个驱动插件，自行监视的 bundle
 
-热重载是一项组合决策：web 组合包无条件挂载 `client-hmr` 行（一个常规的插件包），其 node 半带来 bundle 监视与 SSE（Server-Sent Events）通道；没有重建 watcher 改写客户端 bundle 时链路保持空闲。不应暴露它的组合可以禁用该行。
+热重载是一项组合决策：Web 表层无条件挂载 `client-hmr` 配置项（一个常规的插件包），其 node 半带来 bundle 监视与 SSE（Server-Sent Events）通道；没有重建 watcher 改写客户端 bundle 时链路保持空闲。不应暴露它的表层（包括 Electron）会省略该配置项。
 
 重建好的 bundle 怎么变成重载信号？hmr 的 node 半自己观察——没有构建器来通知它。它从 `ctx.clientModules.clientPath(id)` 读取图上各行的 bundle 路径，由 HMR 自持的单个定时器对当前图上的每一行做 stat 轮询。新增图行时，顺序固定为先同步取得 stat 基线，再立即调用 `clientModuleHost.rebuilt(id)`：在模块 host 算出图哈希之后、取得基线之前发生的写入会被这次立即重哈希捕获；取得基线之后发生的写入则会留下 stat 差异，供下一次轮询捕获。这避开了 `fs.watchFile`：它以异步首次 stat 建立基线，可能把构造期间的重建静默吸收进基线。监视集合的成员随 `onGraphChanged` 更新；消失的行撤下监视，轮询时缺失的 bundle 则让对应行保持标脏状态，文件重现时即使元数据相同也强制重哈希。mtime/size 变化或行处于标脏状态时，`clientModuleHost.rebuilt(id)` 是重哈希的唯一入口；当 `rev` 真的变了，node 半才在 `GET /plugins/events` 上广播 `rebuilt` 帧——这是一条系统级 SSE 通道，连接即发全量图，变更时发 `rebuilt` 帧，仅供呈现的 wire，永不进会话日志。轮询是刻意选择：inotify 在 weka 网络挂载上不触发，构建侧监视器需要 `--poll` 也是同一原因；轮询间隔是一个经校验的配置字段（默认 500ms），dispose（资源释放）会清掉那一个定时器。重建 bundle 则是任意一个 tsdown watch 进程的事——`scripts/dev-web.ts` 仍作为 watch 构建入口保留，其包清单在启动时扫描 `packages/*/*/package.json` 按 dsh.client 发现——构建器与 host 共享零协议。写一半的 bundle 被撕裂读取会自愈：写入完成期间 stat 持续变化，下一个轮询节拍会再次重哈希并广播最终的 rev。
 
@@ -113,7 +113,7 @@ vendored Loader 经其 `internal` 约定消费模块系统——唯一调用点�
 | `dsh-client-ui-slots` | slot 注册表核心 | 普通包，已播种 | 升格为插件；接收 runtime 的 slots 机件 |
 | `dsh-client-web-react` | ctx↔React 胶水 | 普通包，已播种 | 升格为插件；渲染器安装移入其 apply |
 | `dsh-client-ui-primitives` | 基础组件 | 普通包，已播种 | 升格为插件（组件经 slot/服务供给） |
-| `dsh-client-connection` | wire 层 | 插件（dsh.client + bundle），声明 `immediately` | 传输替换（Electron IPC 载体） |
+| `dsh-client-connection` | wire 层 | 插件（dsh.client + bundle），声明 `immediately`；apply 时选择 Web 或 Electron IPC | 其他载体复用 Fetch seam |
 | `dsh-client-runtime` | 会话对象层 + slots 服务 + store 引擎 | 插件，声明 `immediately` | 持续缩向纯会话对象层 |
 | `dsh-client-ui-theme` | 主题 token/服务 | 插件，声明 `immediately`，外加 `./styles/*` 源码通道 | Theme Registry（另行裁定） |
 | `dsh-client-i18n` | I18nService | 插件，声明 `immediately` | 按部署组合语言包 |
@@ -126,7 +126,7 @@ wire 两侧跑着同一份治理实现；浏览器特有层只包含一套模块
 
 接受的代价：vendored Loader 在浏览器里背着闲置机件（EntryTree 持久化是 no-op，分组/隔离未用）；开发期每次修改插件都要付一次 bundle 重建加 fiber 重挂；图中 `inject` 行仅是信息性说明——激活的真相在服务层——因此不匹配会在 settled 扫描时浮出，而不是在图校验时被拦下；三个尚未升格的库在各自的 DI 转换落地之前保持静态 import 导出；每个 bundle 多出一份 sourcemap 产物，外部脚本失败也只能给出粗粒度的 URL 诊断，不能像显式 fetch 那样报告 HTTP 状态。
 
-名册：住在 web 组合包的配置树里（`packages/bundle/web-app/cordis.patch.yml`）；`mountWebPlugins` 与 `CLIENT_PACKAGES` 常量已消失，重组一次部署等于换 yml/overlay。图的组合器从 webserver 侧的注册表迁进 `dsh-client-modules` 的 node 半（该包按本 note 的升级法则升格为双面——其消费方现经 cordis DI 到达），传输拆分同轮落地：webserver 变为朴素路由注册插件，`/api/*` 绑定迁到 connection 的 node 半、走升格后的 `api-gateway` 插件（`dsh-host-apiproxy` 提供 `ctx.apiProxy`），dev 的 bundle 监视与 SSE（Server-Sent Events）通道迁到 hmr 的 node 半。
+roster：住在共享 GUI 组合包的 patch 树里（`packages/bundle/gui-app/cordis.patch.yml`）；`mountWebPlugins` 与 `CLIENT_PACKAGES` 常量已消失，重组一次部署等于换 yml/overlay。图的组合器从 webserver 侧注册表迁进 `dsh-client-modules` 的 Host 半（该包按本 note 的升级法则升格为双面——其消费方现经 cordis DI 到达），传输拆分同轮落地：webserver 变为朴素路由注册插件，Web `/api/*` 绑定迁到 Connection Host 半、走升格后的 `api-gateway` 插件（`dsh-host-apiproxy` 提供 `ctx.apiProxy`），Electron 经 IPC 直接分发同一个 Host Connection，dev bundle 监视与 SSE（Server-Sent Events）通道则继续由仅 Web 的 HMR 配置项持有。
 
 ## Alternatives considered
 

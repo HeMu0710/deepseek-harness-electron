@@ -8,6 +8,7 @@
     "rewriteRelativeImportExtensions": false
   },
   "include": [
+    "apps/electron/tests/**/*.ts",
     "apps/web/tests/scaffold.ts",
     "apps/web/tests/default-model.e2e.ts",
     "apps/web/tests/declared-reasoning.e2e.ts",
@@ -240,8 +241,11 @@
     { "path": "./packages/acp/acp" },
     { "path": "./packages/examples/acp-demo" },
     { "path": "./packages/bundle/base" },
+    { "path": "./packages/bundle/gui-app" },
+    { "path": "./packages/bundle/electron-app" },
     { "path": "./packages/bundle/headless" },
     { "path": "./packages/bundle/web-app" },
+    { "path": "./apps/electron" },
     { "path": "./packages/boot/app-boot" },
     { "path": "./packages/boot/cmdline" },
     { "path": "./packages/sdk/server" },

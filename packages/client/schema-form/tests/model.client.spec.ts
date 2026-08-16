@@ -13,6 +13,16 @@ describe('rehydration and validation', () => {
     expect(validateDraft(root, { name: 42 })).toContain('name')
   })
 
+  it('keeps serialized transforms inert while preserving structural validation', () => {
+    const root = rehydrateSchema(Wire(Schema.object({
+      name: Schema.transform(Schema.string(), value => value.trim()),
+    })))
+
+    expect((root as unknown as (value: unknown) => unknown)({ name: ' spaced ' }))
+      .toEqual({ name: ' spaced ' })
+    expect(validateDraft(root, { name: 42 })).toContain('name')
+  })
+
   it('stringifies non-Error validation throws', () => {
     const hostile = (() => {
       throw 'plain-string failure'

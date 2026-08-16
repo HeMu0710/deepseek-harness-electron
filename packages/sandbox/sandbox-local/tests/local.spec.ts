@@ -7,7 +7,7 @@
  * are all exercised through the real `confine()` path.
  */
 
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -114,7 +114,7 @@ describe('runnerCommand config', () => {
     const { sandbox } = await setup({
       runnerCommand: ['fake-runner', '--flag'],
       runnerFailureSignatures: ['fake-runner: profile rejected'],
-    }, { probeBwrap, probeLandlock, probeSeatbelt })
+    }, { probeBwrap, probeLandlock, probeSeatbelt, electronProcess: true })
     const confined = sandbox.confine(['bash', '-c', 'echo hi'], WW)
     expect(confined).toEqual({
       argv: ['fake-runner', '--flag', ...bwrapProfileArgs(WW), '--', 'bash', '-c', 'echo hi'],
@@ -387,6 +387,7 @@ describe('the windows-acl probe (runner invocation contract)', () => {
       probeWindowsAcl,
       probeBwrap: () => false,
       windowsAclRunnerArgs: ['node', 'windows-acl-runner.js'],
+      electronProcess: true,
     })
     const confined = sandbox.confine(['true'], RO)
     expect(probeWindowsAcl).toHaveBeenCalledTimes(1)
@@ -394,6 +395,26 @@ describe('the windows-acl probe (runner invocation contract)', () => {
     expect(confined.enforcement).toBe('partial')
     expect(confined.denialSignatures).toEqual(['access is denied', 'access to the path', 'permission denied'])
     expect(confined.runnerFailureRules).toEqual([{ allowedExitCodes: [127], fatalSignatures: ['windows-acl-run: '] }])
+    expect(confined.runnerEnv).toBeUndefined()
+  })
+
+  it('sets Electron run-as-Node only for the default JavaScript runner and its real probe', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-electron-acl-entry-'))
+    const builtEntry = join(dir, 'runner.js')
+    writeFileSync(builtEntry, 'process.exit(process.env.ELECTRON_RUN_AS_NODE === "1" ? 0 : 91)\n')
+    try {
+      const { sandbox } = await setup({}, {
+        chain: ['windows-acl', 'bwrap'],
+        probeBwrap: () => false,
+        windowsAclRunnerEntry: builtEntry,
+        electronProcess: true,
+      })
+      const confined = sandbox.confine(['true'], RO)
+      expect(confined.argv.slice(0, 2)).toEqual([process.execPath, builtEntry])
+      expect(confined.runnerEnv).toEqual({ ELECTRON_RUN_AS_NODE: '1' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('reads a failing probe as unusable and walks to the next rung', async () => {

@@ -97,16 +97,19 @@ function defaultProbeSeatbelt(seatbeltExec: string, timeoutMs: number): boolean 
  * sole candidate, so the product never probes; the probe exists for override
  * chains and mirrors the other rungs' shape.
  */
-function defaultProbeWindowsAcl(runnerInvocation: string[], timeoutMs: number): boolean {
-  const program = runnerInvocation[0]
+function defaultProbeWindowsAcl(runnerLaunch: RunnerLaunch, timeoutMs: number): boolean {
+  const program = runnerLaunch.argv[0]
   if (program === undefined) return false
   const probe = spawnSync(program, [
-    ...runnerInvocation.slice(1),
+    ...runnerLaunch.argv.slice(1),
     '--workspace', tmpdir(), '--temp', tmpdir(), '--mode', 'read-only',
     '--', 'cmd', '/c', 'exit', '0',
   ], {
     timeout: timeoutMs,
     stdio: 'ignore',
+    ...runnerLaunch.runnerEnv === undefined
+      ? {}
+      : { env: { ...process.env, ...runnerLaunch.runnerEnv } },
   })
   return probe.status === 0
 }
@@ -131,6 +134,8 @@ export interface SandboxInternals {
   windowsAclRunnerArgs?: string[]
   /** Replaces the resolved windows-acl runner built entry path (a fake lib/runner.js location). */
   windowsAclRunnerEntry?: string
+  /** Replaces Electron process detection for the default JavaScript windows-acl runner. */
+  electronProcess?: boolean
   /** Replaces the functional windows-acl probe (the win32 chain's sole rung — only consulted if that chain ever grows). */
   probeWindowsAcl?: () => boolean
   /** Replaces the private-temp-directory removal at provider dispose (a throwing fake exercises the cleanup-failure path). */
@@ -139,6 +144,12 @@ export interface SandboxInternals {
 
 /** The chain's verdict: which runner confines, and how completely it enforces. */
 type SelectedRunner = { runner: 'bwrap' | 'landlock' | 'seatbelt' | 'windows-acl'; enforcement: SandboxEnforcement }
+
+/** One outer runner launch before the caller argv is appended. */
+interface RunnerLaunch {
+  argv: string[]
+  runnerEnv?: Record<string, string>
+}
 
 /** One live session/workspace pair's private temp directory and capability. */
 interface AclTempCapability {
@@ -309,7 +320,8 @@ export class LocalSandboxProvider extends SandboxProvider {
    *
    * @param argv - the exact argv the caller is about to spawn.
    * @param policy - the file-effect policy this execution runs under.
-   * @returns the wrapped argv plus the selected backend's enforcement completeness, denial
+   * @returns the wrapped argv, any outer-runner-only environment entries,
+   *   plus the selected backend's enforcement completeness, denial
    *   signatures, and structured runner-failure rules; throws the fail-closed
    *   `SANDBOX_UNAVAILABLE` error when the platform has no usable runner.
    */
@@ -323,9 +335,10 @@ export class LocalSandboxProvider extends SandboxProvider {
       }
     }
     const selected = this.selectRunner(policy.mode)
-    const runnerArgv = this.runnerArgv(selected.runner, policy)
+    const runnerLaunch = this.runnerLaunch(selected.runner, policy)
     return {
-      argv: [...runnerArgv, '--', ...argv],
+      argv: [...runnerLaunch.argv, '--', ...argv],
+      ...runnerLaunch.runnerEnv === undefined ? {} : { runnerEnv: runnerLaunch.runnerEnv },
       enforcement: selected.enforcement,
       denialSignatures: DENIAL_SIGNATURES[selected.runner],
       runnerFailureRules: RUNNER_FAILURE_RULES[selected.runner],
@@ -333,11 +346,11 @@ export class LocalSandboxProvider extends SandboxProvider {
   }
 
   /** The selected rung's runner invocation (program + profile arguments) for one policy. */
-  private runnerArgv(runner: SelectedRunner['runner'], policy: SandboxPolicy): string[] {
+  private runnerLaunch(runner: SelectedRunner['runner'], policy: SandboxPolicy): RunnerLaunch {
     switch (runner) {
-      case 'bwrap': return ['bwrap', ...bwrapProfileArgs(policy)]
-      case 'landlock': return [this.landlockLauncher(), ...landlockProfileArgs(policy)]
-      case 'seatbelt': return [this.seatbeltExec(), ...seatbeltProfileArgs(policy)]
+      case 'bwrap': return { argv: ['bwrap', ...bwrapProfileArgs(policy)] }
+      case 'landlock': return { argv: [this.landlockLauncher(), ...landlockProfileArgs(policy)] }
+      case 'seatbelt': return { argv: [this.seatbeltExec(), ...seatbeltProfileArgs(policy)] }
       case 'windows-acl': return this.windowsAclRunnerArgv(policy)
       default: return assertNever(runner)
     }
@@ -355,25 +368,32 @@ export class LocalSandboxProvider extends SandboxProvider {
    * @param policy - the resolved per-call policy.
    * @returns the runner invocation.
    */
-  private windowsAclRunnerArgv(policy: SandboxPolicy): string[] {
+  private windowsAclRunnerArgv(policy: SandboxPolicy): RunnerLaunch {
+    const runnerLaunch = this.windowsAclRunnerInvocation()
     const sessionId = policy.sessionId
     if (sessionId === undefined || policy.mode === 'read-only') {
-      return [
-        ...this.windowsAclRunnerInvocation(),
-        '--workspace', policy.workspaceRoot,
-        '--temp', tmpdir(),
-        '--mode', policy.mode,
-      ]
+      return {
+        ...runnerLaunch,
+        argv: [
+          ...runnerLaunch.argv,
+          '--workspace', policy.workspaceRoot,
+          '--temp', tmpdir(),
+          '--mode', policy.mode,
+        ],
+      }
     }
     const temp = this.materializeAclGrant(sessionId, policy.workspaceRoot)
-    return [
-      ...this.windowsAclRunnerInvocation(),
-      '--workspace', policy.workspaceRoot,
-      '--temp', temp.dir,
-      '--mode', policy.mode,
-      '--write-sid', workspaceWriteSid(policy.workspaceRoot),
-      '--temp-write-sid', temp.writeSid,
-    ]
+    return {
+      ...runnerLaunch,
+      argv: [
+        ...runnerLaunch.argv,
+        '--workspace', policy.workspaceRoot,
+        '--temp', temp.dir,
+        '--mode', policy.mode,
+        '--write-sid', workspaceWriteSid(policy.workspaceRoot),
+        '--temp-write-sid', temp.writeSid,
+      ],
+    }
   }
 
   /**
@@ -551,16 +571,31 @@ export class LocalSandboxProvider extends SandboxProvider {
   /**
    * The windows-acl runner argv prefix: the built lib/runner.js entry when
    * present (production), else the package source through tsx (development).
-   * The prefix stays `[node, runner, ...]` — a future native-exe runner keeps
-   * the same argv contract and only swaps these entries.
+   * In Electron, the default JavaScript entry also requests run-as-Node for
+   * this outer launch. Overrides receive no environment overlay, so a future
+   * native-exe runner keeps the argv contract without inheriting that setting.
    */
-  private windowsAclRunnerInvocation(): string[] {
+  private windowsAclRunnerInvocation(): RunnerLaunch {
     const override = this.internals.windowsAclRunnerArgs
-    if (override !== undefined) return override
+    if (override !== undefined) return { argv: override }
     const builtEntry = this.internals.windowsAclRunnerEntry ?? fileURLToPath(import.meta.resolve('@deepseek-ai/dsh-sandbox-windows-acl/runner'))
-    if (existsSync(builtEntry)) return [process.execPath, builtEntry]
+    const runnerEnv = this.isElectronProcess() ? { ELECTRON_RUN_AS_NODE: '1' } : undefined
+    if (existsSync(builtEntry)) {
+      return {
+        argv: [process.execPath, builtEntry],
+        ...runnerEnv === undefined ? {} : { runnerEnv },
+      }
+    }
     const sourceEntry = fileURLToPath(import.meta.resolve('@deepseek-ai/dsh-sandbox-windows-acl/src/runner.ts'))
-    return [process.execPath, '--import', 'tsx/esm', sourceEntry]
+    return {
+      argv: [process.execPath, '--import', 'tsx/esm', sourceEntry],
+      ...runnerEnv === undefined ? {} : { runnerEnv },
+    }
+  }
+
+  /** Whether the current executable is Electron rather than plain Node. */
+  private isElectronProcess(): boolean {
+    return this.internals.electronProcess ?? process.versions.electron !== undefined
   }
 }
 

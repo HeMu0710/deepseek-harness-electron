@@ -1,4 +1,4 @@
-/** Browser caller for generic Connection unary RPC channels. */
+/** Transport-neutral caller for generic Connection unary RPC channels. */
 
 import {
   RpcId,
@@ -12,11 +12,15 @@ const INTERNAL_BASE = 'http://dsh.internal'
 const CHANNEL_PATTERN = /^\/[A-Za-z0-9._~-]+$/
 const ENDPOINT_SEGMENT_PATTERN = /^[A-Za-z0-9_$.-]+$/
 
+/** Fetch-compatible carrier shared by the API client and generic RPC. */
+export type ConnectionFetch = (input: URL, init?: RequestInit) => Promise<Response>
+
 /**
- * Create the browser-backed generic RPC caller.
+ * Create the generic RPC caller over a Fetch-compatible carrier.
+ * @param doFetch - carrier for the Web fetch or desktop preload bridge.
  * @returns caller that owns request correlation and response-envelope validation.
  */
-export function createWebConnectionRpc(): ClientConnectionRpc {
+export function createConnectionRpc(doFetch: ConnectionFetch = webFetch): ClientConnectionRpc {
   return {
     async call(channel, endpoint, payload, signal) {
       assertTarget(channel, endpoint)
@@ -27,7 +31,7 @@ export function createWebConnectionRpc(): ClientConnectionRpc {
         method: endpoint,
         payload,
       }
-      const response = await globalThis.fetch(
+      const response = await doFetch(
         new URL(`${channel}/${endpoint}`, resolveBase()),
         {
           method: 'POST',
@@ -37,6 +41,7 @@ export function createWebConnectionRpc(): ClientConnectionRpc {
         },
       )
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined)
         throw new Error(`transport failure for ${channel}/${endpoint}: HTTP ${response.status}`)
       }
       const full = serverResponseSchema.parse(await response.json())
@@ -46,6 +51,10 @@ export function createWebConnectionRpc(): ClientConnectionRpc {
       return full.result
     },
   }
+}
+
+function webFetch(input: URL, init?: RequestInit): Promise<Response> {
+  return globalThis.fetch(input, init)
 }
 
 function resolveBase(): string {

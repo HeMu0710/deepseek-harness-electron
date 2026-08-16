@@ -27,6 +27,7 @@ Cordis 框架及其基础库以源码形式 vendored 在 [`vendor/`](../vendor/R
 - **Loader 的 `cordis:` 内建前缀。** `cordis:include`、`cordis:group` 是协议前缀，不是包名。
 - **`cordis.yml` 配置文件家族**，包括 `*.cordis.yml`、`*.cordis.snapshot.yml`、`cordis.patch.yml`。
 - **名字里带这个词的 harness 包**，例如 `@deepseek-ai/dsh-tool-cordis`。
+- **Harness 运行时标识符。** 精确的 `cordis/...` 事件名、`cordis` locale 与 catalog 键，以及 `cordis` agent-preset id 都是产品数据，不是包引用。
 - **上游运行时标识符**，例如 Schemastery 的 `Symbol.for('schemastery')` 及其 `vendor:` 元数据字段。
 - **`docs/` 之外的散文。** `vendor/*/README.md`、各包 README 与 Agent Note 保留写作当时的名字；那里的裸 `cordis` 也可能是 Python SDK 的选项名或某个 agent-preset 的 id。`docs/` 之内，散文与所有 Markdown 围栏都跟着改。
 

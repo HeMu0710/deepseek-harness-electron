@@ -714,11 +714,17 @@ describe('client respond and transport failures', () => {
   })
 
   it('throws on non-OK unary and respond and stream transport', async () => {
-    const broken = new InProcessApiClient({ fetch: async () => new Response('down', { status: 503 }) })
+    const cancelled: string[] = []
+    const broken = new InProcessApiClient({
+      fetch: async () => new Response(new ReadableStream({
+        cancel: () => { cancelled.push('body') },
+      }), { status: 503 }),
+    })
     await expect(broken.sessions.list({})).rejects.toThrow('transport failure for /api/session.list: HTTP 503')
     await expect(broken.respond({ type: 'client-response', rpcId: RpcId('r'), result: { ok: true, value: null } }))
       .rejects.toThrow('transport failure for /api/respond')
     await expect(collect(broken.events.mux({}, new AbortController().signal))).rejects.toThrow('transport failure for /api/events.mux')
+    expect(cancelled).toEqual(['body', 'body', 'body'])
   })
 
   it('throws on an rpcId echo mismatch', async () => {

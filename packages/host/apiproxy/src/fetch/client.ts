@@ -321,7 +321,10 @@ export abstract class AbstractApiClient implements IApiClient {
       body: JSON.stringify(body),
       ...requestSignal === undefined ? {} : { signal: requestSignal },
     })
-    if (!response.ok) throw new Error(`transport failure for ${path}: HTTP ${response.status}`)
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined)
+      throw new Error(`transport failure for ${path}: HTTP ${response.status}`)
+    }
     return response
   }
 
@@ -373,7 +376,10 @@ export abstract class AbstractApiClient implements IApiClient {
     onOpen?: () => void,
   ): AsyncGenerator<RpcRequest<F>> {
     const response = await this.doFetch(new URL(path, this.resolveBase()), { signal })
-    if (!response.ok || response.body === null) throw new Error(`transport failure for ${path}: HTTP ${response.status}`)
+    if (!response.ok || response.body === null) {
+      if (!response.ok) await response.body?.cancel().catch(() => undefined)
+      throw new Error(`transport failure for ${path}: HTTP ${response.status}`)
+    }
     onOpen?.()
     const reader = response.body.getReader()
     const decoder = new TextDecoder()

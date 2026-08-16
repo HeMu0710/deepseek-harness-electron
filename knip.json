@@ -740,6 +740,21 @@
         "@deepseek-ai/.+"
       ]
     },
+    "apps/electron": {
+      "entry": [
+        "src/host.ts",
+        "src/main.ts",
+        "src/preload.ts",
+        "tests/**/*.spec.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "tests/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@deepseek-ai/.+"
+      ]
+    },
     "packages/client/modules": {
       "entry": [
         "tests/**/*.spec.ts"
@@ -771,6 +786,22 @@
     "packages/bundle/base": {
       "ignoreDependencies": [
         "@deepseek-ai/.+"
+      ]
+    },
+    "packages/bundle/electron-app": {
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@deepseek-ai/dsh-.+"
+      ]
+    },
+    "packages/bundle/gui-app": {
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@deepseek-ai/dsh-.+"
       ]
     },
     "packages/bundle/headless": {

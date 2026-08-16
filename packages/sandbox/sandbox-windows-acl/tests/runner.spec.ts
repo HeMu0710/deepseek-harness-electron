@@ -25,10 +25,11 @@ function pwshAvailable(): boolean {
   return spawnSync(resolvePwshPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$true'], { encoding: 'utf8' }).status === 0
 }
 
-function runRunner(args: string[], timeoutMs = 30_000) {
+function runRunner(args: string[], timeoutMs = 30_000, env?: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, ['--import', 'tsx/esm', runnerEntry, ...args], {
     timeout: timeoutMs,
     encoding: 'utf8',
+    ...env === undefined ? {} : { env },
   })
 }
 
@@ -73,6 +74,15 @@ describe.skipIf(!isWin32 || !pwshAvailable())('windows-acl runner', () => {
     rmSync(isolatedTemp, { recursive: true, force: true })
     if (publicProbeDir !== undefined) rmSync(publicProbeDir, { recursive: true, force: true })
   })
+
+  it('removes Electron run-as-Node before spawning the confined command', () => {
+    const result = runRunner([
+      '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'read-only',
+      '--', process.execPath, '-e', 'process.stdout.write(process.env.ELECTRON_RUN_AS_NODE ?? "absent")',
+    ], 30_000, { ...process.env, ELECTRON_RUN_AS_NODE: '1' })
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+    expect(result.stdout).toBe('absent')
+  }, 30_000)
 
   it('workspace-write: the confined child writes granted directories only', () => {
     const probe = [

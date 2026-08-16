@@ -7,19 +7,27 @@
  */
 
 import { pathToFileURL } from 'node:url'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { parseEnv } from 'node:util'
-import { basename, dirname, isAbsolute, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import * as yaml from 'js-yaml'
 import { Context, type FiberState } from '@deepseek-ai/cordis'
 import Loader, { type Entry, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import Include, { applyEntryPatches, entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Group from '@deepseek-ai/cordis-plugin-group'
+import { withFileLock } from '@deepseek-ai/dsh-atomic-write'
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import type {} from '@deepseek-ai/cordis-plugin-hmr'
 // Side-effect type import: resolves `ctx.get('systemPrompt')` to the service.
 import type {} from '@deepseek-ai/dsh-system-prompt'
+import {
+  composeEntries,
+  healProfilesModuleFallback,
+  loadProfile,
+  PROFILE_PATCH_FILENAME,
+  type Profile,
+} from './profile.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -798,6 +806,280 @@ export async function boot(
     while (deepest instanceof Error && deepest.cause !== undefined) deepest = deepest.cause
     const stack = deepest instanceof Error && deepest !== cause ? `\n${deepest.stack ?? deepest.message}` : ''
     throw new Error(`${binName}: ${stage}: ${detail}${stack}`, { cause })
+  }
+}
+
+/** Root config filename inside a profile directory. */
+export const PROFILE_ROOT_FILENAME = 'cordis.yml'
+
+/** The session-telemetry row targeted by a launcher's hard-disable switch. */
+const TELEMETRY_ROW_ID = 'session-telemetry-otel'
+
+/** The empty root entry list every profile tree patches over. */
+const PROFILE_ROOT_CONFIG = `# dsh profile root — an empty entry list. The tree is composed as patches:
+# each bundle in package.json's dsh.profile.bundles, then cordis.patch.yml, then any
+# --patch overlays. Edit cordis.patch.yml, not this file.
+[]
+`
+
+/** Inputs that identify and load one profile for an installed application. */
+export interface ProfilePreparationOptions {
+  /** Diagnostic prefix used by profile and patch-loading failures. */
+  binName: string
+  /** Profile name under the Harness home. */
+  profile: string
+  /** Absolute path of the installed application's package.json. */
+  installAnchor: string
+  /** Parse the profile's user patch layer; defaults to true. */
+  userLayer?: boolean
+}
+
+/**
+ * Resolve the home-level user patch applied after every profile's own layer.
+ * The Harness home is resolved per call so a launcher or test may set
+ * `DSH_HOME` after this module loads.
+ * @returns the absolute `$DSH_HOME/cordis.patch.yml` path.
+ */
+export function homePatchPath(): string {
+  return join(resolveDshHome(), PROFILE_PATCH_FILENAME)
+}
+
+/**
+ * Resolve one profile, heal its installation module fallback, and rewrite its
+ * empty Loader root. Rewriting prevents Loader tree persistence from baking
+ * composed rows into the root and duplicating bundle inserts on the next run.
+ * @param options - application anchor, profile name, and user-layer policy.
+ * @returns the loaded bundle and user patch layers.
+ */
+export function prepareProfile(options: ProfilePreparationOptions): Profile {
+  healProfilesModuleFallback(options.installAnchor)
+  const profile = loadProfile(
+    options.binName,
+    options.profile,
+    options.installAnchor,
+    undefined,
+    options.userLayer === undefined ? {} : { userLayer: options.userLayer },
+  )
+  writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG)
+  return profile
+}
+
+/**
+ * Resolve a telemetry opt-out value into the hard-disable patch. Every
+ * non-empty value disables telemetry, including `0` and `false`; a profile
+ * without the telemetry row needs no patch.
+ * @param disabledValue - raw launcher setting, or undefined when unset.
+ * @param hasRow - whether the composed profile contains the telemetry row.
+ * @returns the disable patch, or undefined when no patch is required.
+ */
+export function resolveTelemetryPatch(
+  disabledValue: string | undefined,
+  hasRow: boolean,
+): PatchOptions | undefined {
+  if ((disabledValue ?? '') === '' || !hasRow) return undefined
+  return { id: TELEMETRY_ROW_ID, disabled: true }
+}
+
+/** Application-owned inputs for a complete profile boot. */
+export interface ProfileBootOptions {
+  /** Diagnostic prefix used by profile, patch, and Loader failures. */
+  binName: string
+  /** Profile name under the Harness home. */
+  profile: string
+  /** Absolute path of the installed application's package.json. */
+  installAnchor: string
+  /** Required overlay patch files in launcher argument order. */
+  patchFiles: readonly string[]
+  /** Application-owned system preset root inserted when the profile contains `agent-presets`. */
+  shippedPresetRoot?: string
+  /** Raw telemetry hard-disable setting; every non-empty value disables. */
+  telemetryDisabled?: string
+  /** Launcher shutdown signal; abort skips or contains post-boot watcher setup. */
+  shutdownSignal?: AbortSignal
+  /** Host setup run after Loader installation and before profile entries mount. */
+  prepare?: (ctx: Context) => Promise<void> | void
+}
+
+/** A settled profile boot and the loaded profile that produced it. */
+export interface ProfileBootResult {
+  /** Root application context; call {@link ProfileBootResult.dispose} to release it. */
+  ctx: Context
+  /** Resolved bundle and user patch layers. */
+  profile: Profile
+  /**
+   * Drain the application tree, then release this process's exclusive Harness-home
+   * Host lock. Concurrent and repeated calls join the same disposal.
+   * @returns a promise that settles after both resources are released.
+   */
+  dispose(): Promise<void>
+}
+
+/** One exclusive Harness-home Host lock held by a deferred writer operation. */
+interface HostHomeLease {
+  /** Release the writer operation and wait for its lock file cleanup. */
+  release(): Promise<void>
+}
+
+/**
+ * Acquire `$DSH_HOME/.host.lock` through the shared cross-process writer lock.
+ * The deferred operation keeps the lock held until the returned release method
+ * settles it. `composeProfile` has already materialized the home, while the
+ * explicit mkdir preserves that precondition if profile preparation changes.
+ */
+async function acquireHostHomeLease(): Promise<HostHomeLease> {
+  const home = resolveDshHome()
+  mkdirSync(home, { recursive: true })
+  const acquired = Promise.withResolvers<void>()
+  const releaseGate = Promise.withResolvers<void>()
+  const holding = withFileLock(join(home, '.host'), async () => {
+    acquired.resolve()
+    await releaseGate.promise
+  })
+  await Promise.race([acquired.promise, holding])
+  let releaseTask: Promise<void> | undefined
+  return {
+    release() {
+      releaseTask ??= (async () => {
+        releaseGate.resolve()
+        await holding
+      })()
+      return releaseTask
+    },
+  }
+}
+
+/** One profile's fixed and user-reloadable patch layers. */
+interface ComposedProfile {
+  profile: Profile
+  /** Bundle layers below both live user layers. */
+  bundlePatches: PatchOptions[]
+  /** Home-level user layer applied after the profile's user layer. */
+  homePatches: PatchOptions[]
+  /** Required overlays followed by application-owned preset and telemetry patches. */
+  overlays: PatchOptions[]
+}
+
+/** Return the complete initial patch stack in application order. */
+function allProfilePatches(composed: ComposedProfile): PatchOptions[] {
+  return [
+    ...composed.bundlePatches,
+    ...composed.profile.patches,
+    ...composed.homePatches,
+    ...composed.overlays,
+  ]
+}
+
+/** Load and compose the fixed layers needed by boot and later user-layer refreshes. */
+function composeProfile(options: ProfileBootOptions): ComposedProfile {
+  const profile = prepareProfile({
+    binName: options.binName,
+    profile: options.profile,
+    installAnchor: options.installAnchor,
+  })
+  const homePatches = loadOptionalPatches(options.binName, homePatchPath()) ?? []
+  const overlays = options.patchFiles.flatMap(file => loadOverlayPatches(options.binName, resolve(file)))
+  const bundlePatches = profile.layers.flatMap(layer => layer.patches)
+  const rows = new Map<string, EntryOptions>()
+  for (const row of composeEntries([bundlePatches, profile.patches, homePatches, overlays])) {
+    if (typeof row.id === 'string') rows.set(row.id, row)
+  }
+  const appOverlays = [...overlays]
+  const presets = rows.get('agent-presets')
+  if (options.shippedPresetRoot !== undefined && presets !== undefined) {
+    appOverlays.push({
+      id: 'agent-presets',
+      config: {
+        ...(presets.config ?? {}) as Record<string, unknown>,
+        roots: [{ path: options.shippedPresetRoot, trust: 'system' }],
+      },
+    })
+  }
+  const telemetryPatch = resolveTelemetryPatch(options.telemetryDisabled, rows.has(TELEMETRY_ROW_ID))
+  if (telemetryPatch !== undefined) appOverlays.push(telemetryPatch)
+  return { profile, bundlePatches, homePatches, overlays: appOverlays }
+}
+
+/** Return whether launcher or tree shutdown already owns a watcher setup failure. */
+function profileShutdownOwnsError(ctx: Context, signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true || ctx.fiber.state !== FIBER_ACTIVE || ctx.get('loader') === undefined
+}
+
+/**
+ * Compose and boot one profile, then keep both user patch layers live. The
+ * caller owns process signals, fatal-rejection policy, and application services.
+ * This function owns profile composition, watcher setup, and one exclusive
+ * Harness-home Host lock. {@link ProfileBootResult.dispose} drains the root
+ * context before releasing that lock. Bundle patches remain below the profile
+ * and home user layers, while required overlays, the shipped preset root, and
+ * telemetry hard-disable remain above them on every refresh.
+ *
+ * If the composition supplies no HMR service, the installed application must
+ * make `@deepseek-ai/cordis-plugin-timer` and
+ * `@deepseek-ai/cordis-plugin-hmr` resolvable so this function can mount the
+ * config-only watcher pair.
+ * @param options - application anchor, patch layers, application overlays, shutdown signal, and host preparation.
+ * @returns the settled root context, resolved profile, and idempotent disposer.
+ * @throws profile, patch, Harness-home lock, Loader, or watcher setup failures;
+ *   any acquired lock and active tree are released before startup rejects.
+ */
+export async function bootProfile(options: ProfileBootOptions): Promise<ProfileBootResult> {
+  const composed = composeProfile(options)
+  const homeLease = await acquireHostHomeLease()
+  let ctx: Context | undefined
+  let disposeTask: Promise<void> | undefined
+  const dispose = (): Promise<void> => {
+    disposeTask ??= (async () => {
+      try {
+        await ctx?.fiber.dispose()
+      } finally {
+        await homeLease.release()
+      }
+    })()
+    return disposeTask
+  }
+  const composeLive = (): PatchOptions[] => structuredClone([
+    ...composed.bundlePatches,
+    ...loadOptionalPatches(options.binName, composed.profile.patchPath) ?? [],
+    ...loadOptionalPatches(options.binName, homePatchPath()) ?? [],
+    ...composed.overlays,
+  ])
+  // Include mutates inserted patch rows during application, so each boot and
+  // refresh receives a fresh graph rather than retaining a removed override.
+  try {
+    ctx = await boot(
+      options.binName,
+      join(composed.profile.dir, PROFILE_ROOT_FILENAME),
+      structuredClone(allProfilePatches(composed)),
+      options.prepare,
+    )
+    if (options.shutdownSignal?.aborted !== true
+      && ctx.fiber.state === FIBER_ACTIVE
+      && ctx.get('loader') !== undefined) {
+      if (ctx.get('hmr') === undefined) {
+        if (ctx.get('timer') === undefined) {
+          await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-timer' })
+        }
+        await ctx.loader.create({ name: '@deepseek-ai/cordis-plugin-hmr', config: { root: [] } })
+      }
+      await watchUserPatches(ctx, {
+        binName: options.binName,
+        filename: composed.profile.patchPath,
+        compose: composeLive,
+      })
+      await watchUserPatches(ctx, {
+        binName: options.binName,
+        filename: homePatchPath(),
+        compose: composeLive,
+      })
+    }
+    return { ctx, profile: composed.profile, dispose }
+  } catch (error) {
+    if (ctx !== undefined && profileShutdownOwnsError(ctx, options.shutdownSignal)) {
+      await dispose()
+      return { ctx, profile: composed.profile, dispose }
+    }
+    await dispose()
+    throw error
   }
 }
 

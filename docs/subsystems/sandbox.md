@@ -115,7 +115,7 @@ interface RunnerFailureRule {
 }
 ```
 
-`ConfinedArgv` is what the consumer spawns. Besides the replacement argv, it carries the backend's enforcement fact and two orthogonal stderr classifiers. `denialSignatures` identify the confined command being blocked while the sandbox works correctly. `runnerFailureRules` identify the sandbox runner refusing or failing before it executes the command; consumers check these first and surface a sandbox infrastructure failure, never an ordinary task failure.
+`ConfinedArgv` is what the consumer spawns. Besides the replacement argv, it can carry `runnerEnv`, an environment overlay applied after the command environment only for that outer spawn; the runner must remove launcher-only entries before starting the caller argv. It also carries the backend's enforcement fact and two orthogonal stderr classifiers. `denialSignatures` identify the confined command being blocked while the sandbox works correctly. `runnerFailureRules` identify the sandbox runner refusing or failing before it executes the command; consumers check these first and surface a sandbox infrastructure failure, never an ordinary task failure.
 
 ```ts type-equiv
 /**
@@ -126,6 +126,12 @@ interface RunnerFailureRule {
 interface ConfinedArgv {
   /** The wrapped argv (runner, profile, separator, then the caller's argv). */
   argv: string[]
+  /**
+   * Environment entries required only to launch the outer runner. Consumers
+   * merge them after the command environment for that spawn; the runner must
+   * remove launcher-only entries before spawning the caller's argv.
+   */
+  runnerEnv?: Record<string, string>
   /** How completely the selected backend enforces the policy's file effects. */
   enforcement: SandboxEnforcement
   /**
@@ -178,13 +184,14 @@ Abstract process-sandbox service. confine must return enforcing argv or fail clo
  *   `['bash', '-c', command]`.
  * @param policy - the file-effect policy this execution runs under,
  *   carried per call (see {@link SandboxPolicy}).
- * @returns the argv to spawn instead, plus the enforcement completeness
- *   the selected backend achieves for it.
+ * @returns the argv to spawn instead, any environment entries required
+ *   only for that runner launch, and the enforcement completeness the
+ *   selected backend achieves for it.
  */
 abstract confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv
 ```
 
-Source: [`packages/sandbox/sandbox/src/index.ts:158`](../../packages/sandbox/sandbox/src/index.ts)
+Source: [`packages/sandbox/sandbox/src/index.ts:164`](../../packages/sandbox/sandbox/src/index.ts)
 
 <a id="ctxsandboxpolicy--sandboxpolicyservice"></a>
 

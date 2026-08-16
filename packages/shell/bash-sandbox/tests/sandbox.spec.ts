@@ -109,6 +109,25 @@ describe('the provider hand-off', () => {
     expect(result.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'full' })
   })
 
+  it('overlays provider runner environment on foreground and background runner spawns', async () => {
+    const runner = 'process.stdout.write(`${process.env.ELECTRON_RUN_AS_NODE}:${process.env.DSH_RUNNER_ENV}`)'
+    const { bash } = await setup({}, () => ({
+      argv: [process.execPath, '-e', runner],
+      runnerEnv: { ELECTRON_RUN_AS_NODE: '1', DSH_RUNNER_ENV: 'provider' },
+      enforcement: 'full',
+      denialSignatures: UNIX_SIGNATURES,
+      runnerFailureRules: RUNNER_FAILURE,
+    }))
+    const request = { command: 'true', env: { DSH_RUNNER_ENV: 'caller' } }
+
+    const foreground = await bash.run(bash.resolve(request))
+    expect(foreground.stdout.text).toBe('1:provider')
+
+    const background = bash.start(bash.resolve(request))
+    await background.done
+    expect(background.readOutput().delta).toBe('1:provider')
+  })
+
   it('starts a non-Bash runner before the confined inner Bash evaluates BASH_ENV', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-bash-env-order-'))
     const hook = join(dir, 'hook.sh')

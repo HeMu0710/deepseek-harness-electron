@@ -17,8 +17,11 @@ spelling even when Windows supplied an 8.3 alias.
 
 - `@cordisjs/plugin-loader`
 - `@cordisjs/plugin-timer`
-- A runtime that exposes Node's internal module loader. The package throws if
-  the loader service has no internal module loader available.
+- A runtime that exposes Node's internal module loader when `root` contains a
+  module-watch path. The package throws at construction when those roots are
+  non-empty and the Loader internals are unavailable. `root: []` needs no
+  Loader internals and keeps exact config watchers registered through the
+  service active.
 
 ## Usage
 
@@ -41,7 +44,7 @@ spelling even when Windows supplied an 8.3 alias.
 | Field | Description |
 | --- | --- |
 | `base` | Optional base directory resolved from `ctx.baseUrl`. |
-| `root` | Chokidar roots to watch. Defaults to `['.']`. |
+| `root` | Chokidar module roots to watch. Defaults to `['.']`; `[]` disables module HMR while retaining registered exact-config watches. |
 | `ignored` | Picomatch patterns excluded from watch and reload analysis. |
 | `debounce` | Milliseconds to wait before processing a burst of changes. |
 

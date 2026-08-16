@@ -2,7 +2,15 @@
 
 [English](README.md) | 中文
 
-协议消费层：客户端插件的 apply 会挂载 `ctx.connection`（共享 API 客户端 + 当前页面的 loopback 状态 + 可观察且按 generation 生效的 `hostDescription` + 单消费方流循环启动器）；导出表层携带协议约定类型、`AbstractApiClient` 抽象，以及循环的 sink／配置类型。每次就绪握手成功后，都会在 `onConnected` 之前发布完整的 `host.describe` 值；generation 失效或显式 stop 会清空它，因此原生能力消费者不会保留已经断线的判断。浏览器载体以 HTTP POST 发送 unary／respond，并为 `events.mux` 与 `events.host` 各开一条只下行的 WebSocket；进程内载体满足同一双流抽象。Host half 持有唯一 `/api` route 及其 Fetch bridge；已注册的 Typert interceptor 会先认领自己的 Remote endpoint，未认领请求再回退 API Proxy。Loopback hostname 判定逻辑留在包内部：`/api` Host fence 与 WebSocket upgrade 会直接使用它，其他客户端插件则消费派生的 `ctx.connection.isLoopback` 状态。node 半侧的 `/api` 路由让特权方法集（`host.pickDirectory`、`host.openPath`，以及整个配置面——`settings.describe`/`openDocument`/`update`/`replace`/`mutate` 与 `credentials.describe`/`set`/`unset`；读取与原生操作也在内，因为 describe 会返回已暴露的配置、打开操作会作用于 Host 桌面，而探测任意引用会报出某条凭据来自何处——以及 agent（智能体） preset 的创作面 `agentPreset.read`/`copy`/`openDocument`/`remove`，因为组装指明了一个会话所运行的插件，读取它是侦察，而 copy/remove/openDocument 管理名单并驱动宿主桌面（创作只有复制一种写入，因此这些方法都不接收组装文本或路径）；`agentPreset.list` 与 `agentPreset.select` 不在其中——名单只携带 id 与信任级别，而选择一个 preset 并不比 `session.create` 自带的 `agentPreset` 多给任何能力，何况默认 preset 本就带着 bash）以空信任表过信任 fence，从而钉在回环——已声明的 `trustedHosts` 授权可达其余全部方法，而这些方法在真正的认证层出现之前仍只限回环本机。平台载体与 ConnectionController 循环属于包内部；apply 负责选择并驱动它们。下行边界见 [WebSocket 下行载体 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-04-websocket-downlink-carrier.md)。
+协议消费与 Host 分发层。客户端插件挂载的 `ctx.connection` 包含一个共享 API 客户端、通用 RPC、当前平台的 loopback 状态、可观察且按 generation 生效的 `hostDescription`，以及单消费方流循环启动器。就绪握手成功后会在 `onConnected` 前发布完整的 `host.describe` 值；generation 失效或显式 stop 会清空它。renderer（渲染进程）依次选择 fixture 模式、固定的桌面 preload bridge，最后才是 Web 载体。Host 服务独立于具体载体分发 Fetch 请求；可选的 Web adapter 再提供 HTTP 路由、浏览器信任检查与 WebSocket 下行。导出表层携带协议类型、`AbstractApiClient`、桌面 preload 类型以及流循环的 sink／配置类型。
+
+## 桌面 preload 载体
+
+Electron preload 暴露一个冻结且窄化的 `window.__DSH_DESKTOP__` 对象，实现本包导出的 `DesktopBridge` 接口。`fetch` 接收可安全 structured clone 的 `DesktopFetchRequest`，只返回 `DesktopFetchHead`；响应字节仍由 Host 持有。renderer 每次 `ReadableStream` pull 都只调用一次 `pull(id)`，且 high-water mark（高水位）为零，因此只有消费方存在待满足需求时，Host 才会继续读取。`AbortSignal` 与 reader cancellation（读取器取消）最终都调用幂等的 `cancel(id)`。响应正常结束会释放 id；序列化后的读取失败会成为 stream error（流错误）。bridge 会把完整请求体作为 `Uint8Array` 传输，因此 Electron adapter 必须先校验 sender 所有权与请求字段，再调用本地可信的 Host 入口，并应直接复用 Host 导出的 `DEFAULT_MAX_REQUEST_BODY_BYTES` 作为字节上限。
+
+`DesktopApiClient` 与通用 `ctx.connection.rpc` 共享同一个 bridge-backed Fetch 函数。Unary（单次）调用、响应以及 `events.mux`、`events.host` 两条流因此使用同一载体；桌面事件流保留 API Proxy 的 SSE framing（帧格式），并通过 pull 协议传输。`HostConnectionHandle.fetch(request)` 依次分发独占首段路径的 RPC channel、已被 interceptor 认领的 `/api` endpoint，最后回退 API Proxy。Web adapter 会把相同的独占注册挂为 prefix route，并保留原有信任策略；桌面组装不需要 `webServer`。
+
+浏览器载体用 HTTP POST 发送 unary 与 response，并为 `events.mux`、`events.host` 各开启一条只下行的 WebSocket。Loopback hostname 判定留在包内部：`/api` Host fence 与 WebSocket upgrade 直接使用它，其他客户端插件消费 `ctx.connection.isLoopback`。Web `/api` 路由把特权方法集（`host.pickDirectory`、`host.openPath`、settings 与 credentials 配置面、`llm.discoverModels` 以及 agent-preset 创作面）限制在 loopback；真正的认证层出现前，已声明的 `trustedHosts` authority 只可访问其他方法。下行细节见 [WebSocket 下行载体 Agent Note](../../../.agents/notes/implemented/architecture/2026-08-04-websocket-downlink-carrier.md)。
 
 ## /api 浏览器信任栅栏
 
@@ -24,3 +32,4 @@ node 半侧在桥接或 upgrade 前守卫 `/api` 下的每个入口（`src/api-r
 
 - **History 会恢复未附加的会话**：打开 history 可能创建宿主侧 agent，并增加首次打开的延迟；没有仅从持久化读取的路径。
 - **`/api` 桥把每个请求体整体缓冲在内存里**：`maxRequestBodyBytes`（默认 160 MiB，按默认 100 MiB 图片总量上限经 base64 膨胀加信封余量得出）因此同时是单请求的驻留内存上界；要降低它而不缩小图片限额，需要流式请求体路径。
+- **桌面 bridge 会把每个请求体作为一个 structured-clone 值传输**：Electron adapter 执行本包导出的 160 MiB 请求上限；响应体仍按 pull 增量传输。

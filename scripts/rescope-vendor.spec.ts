@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { exactEditState } from './rescope-vendor.ts'
+import { exactEditState, isForwardRuntimeIdentifier } from './rescope-vendor.ts'
 
 const ANCHOR = '\n## Sync procedure'
 const INSERTED = `\n15. **rescope**: one log entry.\n${ANCHOR}`
@@ -37,5 +37,19 @@ describe('exactEditState', () => {
     // A moved or partially applied site: neither state is complete.
     expect(exactEditState('a = 1\nb = 2\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
     expect(exactEditState('x\n', 'a = 1', 'b = 2', 1)).toBe('invalid')
+  })
+})
+
+describe('isForwardRuntimeIdentifier', () => {
+  it('preserves only registered Harness ids in the forward mapping', () => {
+    expect(isForwardRuntimeIdentifier('cordis', 'cordis', '/request-run')).toBe(true)
+    expect(isForwardRuntimeIdentifier('cordis', 'cordis', '/dynamic-package\\')).toBe(true)
+    expect(isForwardRuntimeIdentifier('cordis', 'cordis', '/*')).toBe(true)
+    expect(isForwardRuntimeIdentifier('cordis', 'cordis', '/')).toBe(true)
+    expect(isForwardRuntimeIdentifier('cordis', 'cordis', '/lib')).toBe(false)
+  })
+
+  it('does not preserve a scoped token during reverse mapping', () => {
+    expect(isForwardRuntimeIdentifier('@deepseek-ai/cordis', 'cordis', '/request-run')).toBe(false)
   })
 })

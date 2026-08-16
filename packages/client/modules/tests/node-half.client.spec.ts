@@ -5,10 +5,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, FiberState } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
-import { ClientModuleRegistry } from '../src/index.ts'
+import { ClientModuleRegistry, injectBootManifest } from '../src/index.ts'
 
 let root: string | undefined
 
@@ -37,8 +37,14 @@ function writePackage(
   return clientPath
 }
 
-/** Construct the node-half service and capture its plugin-bundle route. */
-function constructWithRoute(packageNames: string[]): { service: ClientModuleRegistry; route: WebRoute } {
+interface WebCarrierRegistration {
+  service: ClientModuleRegistry
+  route: WebRoute
+  transform: (html: string) => string
+}
+
+/** Construct a context carrying the enabled fixture Loader entries. */
+function contextFor(packageNames: string[]): Context {
   const ctx = new Context()
   ctx.baseUrl = pathToFileURL(root!).href + '/'
   ctx.provide('loader', {
@@ -48,27 +54,81 @@ function constructWithRoute(packageNames: string[]): { service: ClientModuleRegi
       }
     },
   })
+  return ctx
+}
+
+/** Construct the host service and capture the optional Web carrier registrations. */
+async function constructWithWebServer(packageNames: string[]): Promise<WebCarrierRegistration> {
+  const ctx = contextFor(packageNames)
   let route: WebRoute | undefined
+  let transform: ((html: string) => string) | undefined
   const webServer: Pick<WebServer, 'port' | 'register' | 'tapIndex'> = {
     port: 0,
     register: (candidate) => {
       if (candidate.path === '/plugins') route = candidate
       return () => {}
     },
-    tapIndex: () => () => {},
+    tapIndex: (candidate) => {
+      transform = candidate
+      return () => {}
+    },
   }
   ctx.provide('webServer', webServer as WebServer)
-  const service = new ClientModuleRegistry(ctx)
+  await ctx.plugin(ClientModuleRegistry).await()
+  // The optional Web carrier is a child injection whose initial refresh settles independently.
+  await new Promise<void>(resolve => setImmediate(resolve))
+  const service = ctx.get('clientModules')
+  if (service === undefined) throw new Error('client module inventory was not registered')
   if (route === undefined) throw new Error('client bundle route was not registered')
-  return { service, route }
+  if (transform === undefined) throw new Error('client boot manifest tap was not registered')
+  return { service, route, transform }
 }
 
-/** Construct the node-half service over the enabled fixture entries. */
+/** Construct the host inventory over the enabled fixture entries. */
 function construct(packageNames: string[]): ClientModuleRegistry {
-  return constructWithRoute(packageNames).service
+  return new ClientModuleRegistry(contextFor(packageNames))
 }
 
 describe('client bundle activation', () => {
+  it('stays active and exposes inventory without a WebServer', async () => {
+    const packageName = '@fixture/transport-neutral'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'module.exports = {}\n')
+    const ctx = contextFor([packageName])
+
+    const fiber = ctx.plugin(ClientModuleRegistry)
+    await fiber.await()
+
+    expect(fiber.state).toBe(FiberState.ACTIVE)
+    expect(ctx.clientModules.graph().entries.map(entry => entry.id)).toEqual([packageName])
+    expect(ctx.clientModules.clientPath(packageName)).toBe(clientPath)
+    await fiber.dispose()
+  })
+
+  it('installs the bundle route and current graph injection when a WebServer is active', async () => {
+    const packageName = '@fixture/web-carrier'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    writeFileSync(clientPath, 'module.exports = {}\n')
+
+    const { service, route, transform } = await constructWithWebServer([packageName])
+
+    expect(route).toMatchObject({ kind: 'prefix', path: '/plugins' })
+    expect(transform('<html><head></head></html>')).toContain(
+      `<script>window.__DSH_BOOT__ = ${JSON.stringify(service.graph())}</script>`,
+    )
+  })
+
+  it('marks the boot script with a validated CSP nonce', () => {
+    const graph = { rev: 'empty', entries: [] }
+    const html = injectBootManifest('<head></head>', graph, 'desktop_nonce_1234567890')
+    expect(html).toContain('<script nonce="desktop_nonce_1234567890">')
+    expect(() => injectBootManifest('<head></head>', graph, 'bad nonce')).toThrow(
+      'client-modules: boot manifest nonce must be base64url text',
+    )
+  })
+
   it('allows sibling dsh roles', () => {
     const currentName = '@fixture/current-client-field'
     const clientPath = writePackage(currentName, {
@@ -121,7 +181,7 @@ describe('client bundle activation', () => {
     writeFileSync(clientPath, 'module.exports = {}\n')
     const map = '{"version":3,"sources":["src/client/index.tsx"]}\n'
     writeFileSync(`${clientPath}.map`, map)
-    const { route } = constructWithRoute([packageName])
+    const { route } = await constructWithWebServer([packageName])
     let status = 0
     let headers: Record<string, string> | undefined
     let body = ''

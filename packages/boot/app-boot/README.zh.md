@@ -18,6 +18,9 @@
 | `mountRootInclude(ctx, absoluteConfigPath, patches?, bareModuleBaseUrl?)` | 注册静态导入的 `cordis:include` 与 `cordis:group` builtin，挂载 include，并保留用户 patch 层 HMR（热模块替换）使用的确切根配置项；可选模块基准会把裸包名锚定到已安装宿主，而相对名称仍以配置目录为基准 |
 | `watchUserPatches(ctx, options)` | 向现有 Cordis HMR 服务注册指名的 patch 文件；每次新增、变更或移除都会通过调用方的 `compose` 闭包（应用自有层围绕当前用户层）以事务方式重新组合完整 patch 列表，并返回异步 disposer |
 | `resolveProfileDir` / `initProfile` / `loadProfile` / `readProfileManifest` / `writeProfileManifest` / `resolveBundleDir` / `composeEntries` / `healProfilesModuleFallback` / `PROFILE_TEMPLATES` / `DEFAULT_PROFILE_BUNDLES` / `PROFILES_DIR` / `PROFILE_PATCH_FILENAME` | Profile 机制（见 [Profile](#profiles)） |
+| `prepareProfile(options)` / `homePatchPath()` / `PROFILE_ROOT_FILENAME` | 修复应用的 profile 模块后备目录，加载其组合包层和可选用户层，重写空的 Loader 根配置，并定位机器级 patch 层 |
+| `resolveTelemetryPatch(value, hasRow)` | 当 `session-telemetry-otel` 行存在时，把任意非空的启动器 telemetry opt-out 值转换为禁用该行的 patch |
+| `bootProfile(options)` | 在独占的 `$DSH_HOME/.host.lock` 下组合并启动 profile，在必需 overlay 之上添加可选的随附 preset 根目录和 telemetry 强制禁用层，并持续应用两个用户 patch 层；启动器通过 `prepare` / `shutdownSignal` 提供应用服务与关闭状态，并负责调用幂等的 `result.dispose()` |
 | `boot(binName, absoluteConfigPath, patches?, prepare?, bareModuleBaseUrl?)` | 创建根上下文，向 Loader `!!js` 配置表达式暴露 `dshHomePath(...segments)` 并安装 Loader，在配置树条目挂载前执行可选的宿主准备操作（`prepare` 可以使用 Loader，也可以提供由启动器拥有的上下文插槽），再挂载并等待 include 树结算，断言所有条目均已加载并激活，最后返回根上下文——失败时 dispose（资源释放）部分构造的上下文，并以带标签的错误 reject；可选模块基准与 `mountRootInclude` 的解析语义相同 |
 | `renderConfigDump(binName, absoluteConfigPath, layers, warn?)` | 使用 include 自己的解析器和补丁算法（`entryListSchema`/`applyEntryPatches`）离线合成基础配置与带标签的覆盖层，使结果与 `boot()` 挂载的内容一致，再渲染为 YAML，并原样保留 `!!js` 表达式；每段来源于同一文件且由相同补丁层修改的连续行之前都有一条 `# ==` 注释，标明该文件和这些补丁层，输出仍是一份可加载的文档；未匹配到行的补丁连同其层标签交给 `warn`（默认：一行 stderr），读取、解析或字段验证失败则抛出 |
 | `addHarnessSourceSection(ctx, sourceRoot)` | 添加全局 `harness:source` 提示词段落（顺序紧随 harness 身份、位于 persona 之前），告知 agent（智能体）DSH 实现代码 checkout 的磁盘路径，同时提醒它不得据此推断当前工作目录，而应使用 `pwd`；如果已启动树没有此项服务，则不执行操作并返回 `undefined`。这里的服务是 `systemPrompt`；该段落注册到它的 fiber，因此开发环境 HMR 重新加载系统提示词后，它会消失直至下次启动 |
@@ -42,7 +45,7 @@ profile 是位于 `$DSH_HOME/profiles/<name>` 下的目录（harness home 由 [`
 - **`.env`**：产品 CLI 的普通环境层；调用目录的文件优先于 harness home 的文件，两者都低于继承环境。`loadLayeredEnv` 记录每个值的来源，按不区分大小写的方式拒绝 [bootstrap-only 文件变量](../../../.agents/notes/implemented/architecture/2026-08-04-configuration-source-ownership.md#decision)，并把其余值物化进 `process.env`，供 Loader 表达式和第三方库使用。受管凭据另存于 [`.credentials.yaml`](../../credentials/credentials-local/README.md)；留在任一 `.env` 中的凭据仍是低优先级后备值。
 - **`cordis.patch.yml`**（home 级）与 **`profiles/<name>/cordis.patch.yml`**：用户 patch 层，应用在所有组合包层之后（先应用逐 profile 的文件，再应用 home 级文件，因此后者优先级更高）：按 id 定位的 patch 会替换对应条目的整个 `config`（未改字段也要重述），`insert` 会添加条目，`!!js` 表达式则在挂载时插值。如果 patch 指定的条目 id 不在组合后的树中，则输出一条 stderr 警告。空文件或仅含注释的文件会抛出异常（其解析结果为空，而不是列表）；如需禁用该层，请使用 `[]`。
 
-每次 profile 启动都由 `watchUserPatches` 持续应用 `cordis.patch.yml` 的变更（一次性 surface 经由有界关闭 dispose 监视器）。即使该文件或其直接父目录不存在，监视器仍会监视确切路径；它会串行处理突发变更，并按调用方的层次顺序重新组合用户 patch（组合包层在下、overlay 在上）。读取失败、解析失败或 Loader 候选被拒时，最后一个可用树会继续运行；HMR 服务记录错误后广播 `hmr/config-update-failed(filename, Error)`，并隔离观察方的失败。上下文 dispose 时会关闭 watcher，并等待进行中的刷新结束。
+`bootProfile` 会依次应用组合包层、profile 用户层、home 用户层、必需 overlay、可选的随附 preset 根目录和 telemetry 强制禁用层。挂载配置树前，它会获取 `$DSH_HOME/.host.lock`，因此同一时间只能有一个 profile Host 使用某个 Harness home。它通过 `watchUserPatches` 持续应用两个用户文件；每次刷新都会重新读取两个文件，因此并发 watcher 不会把一个新鲜层与一个陈旧层组合起来。profile 未提供 HMR 服务时，`bootProfile` 会挂载仅含配置的 Timer 和 HMR 配置项，已安装应用必须能解析它们。该 HMR 配置项使用 `root: []`，因此只监视已注册的 profile 与 home patch 路径：它不会启用模块 HMR，也不需要 Loader internals，包括打包后的 Electron 环境。即使文件或其直接父目录不存在，watcher 仍会监视确切路径；它会串行处理突发变更，并在读取失败、解析失败或 Loader 候选被拒时保留最后一个可用树。返回的 `dispose()` 会合并重复调用，等待上下文和进行中的刷新完全停稳，关闭两个 watcher，最后才释放 Host 锁。
 
 ## 模型体验
 
@@ -58,3 +61,4 @@ profile 是位于 `$DSH_HOME/profiles/<name>` 下的目录（harness home 由 [`
 - **快照回放替换仅识别特定 basename**：只有以 `cordis.yml` 或 `cordis.yaml` 结尾的配置会映射到同级 `cordis.snapshot.yml`；自定义配置名称需要调用方自行选择。
 - **环境发现以启动为界**：`loadLayeredEnv` 只读取一次调用目录与 harness home 中的 `.env`；它不搜索父目录，也不跟随之后选择的 workspace。`loadEnv` 仍是非产品 bin 使用的单目录 helper。
 - **用户 patch 会替换匹配到的整个配置**：按 id 定位的 patch 不做深度合并，因此 profile 覆盖必须重述需要保留的组合包字段。
+- **Host 锁的崩溃恢复需要人工处理**：进程非正常退出可能遗留 `$DSH_HOME/.host.lock`；后续 profile 启动会超时，而不会抢占该锁。请先确认没有 profile Host 正在使用该 home，再删除锁文件并重试。

@@ -4,7 +4,7 @@
  * Only the dedicated Node compatibility gate opts this test in after building
  * both artifacts; ordinary Vitest inventory deterministically skips it.
  * The child runs built artifacts under plain Node with the real shipped
- * web profile (dsh-base + dsh-web-app bundle patches, auto-initialized).
+ * web profile (dsh-base + dsh-gui-app + dsh-web-app bundle patches, auto-initialized).
  * Its URL line follows the settled profile boot; SIGTERM then exercises the
  * shipped quiescent disposer.
  */
@@ -24,6 +24,7 @@ const webDist = join(repoRoot, 'apps/web/dist/index.html')
 // Full-text session search ships off (`openAt: never` on both layers): the
 // base patch carries the default, and the web restatement must not re-enable it.
 const baseConfigPath = join(repoRoot, 'packages/bundle/base/cordis.patch.yml')
+const guiConfigPath = join(repoRoot, 'packages/bundle/gui-app/cordis.patch.yml')
 const webConfigPath = join(repoRoot, 'packages/bundle/web-app/cordis.patch.yml')
 const requireBuiltArtifacts = process.env.DSH_REQUIRE_BUILT_CLI_SMOKE === '1'
 
@@ -104,15 +105,18 @@ describe.skipIf(!requireBuiltArtifacts)('built CLI lazy-search startup', () => {
     expect(existsSync(webDist), `missing Web dist ${resolve(webDist)}; run pnpm run build:web`).toBe(true)
     const baseRows = (yaml.load(await readFile(baseConfigPath, 'utf8'), { schema: configSchema }) as PatchEntry[])
       .flatMap(entry => entry.insert ?? [entry])
+    const guiRows = (yaml.load(await readFile(guiConfigPath, 'utf8'), { schema: configSchema }) as PatchEntry[])
+      .flatMap(entry => entry.insert ?? [entry])
     const webRows = (yaml.load(await readFile(webConfigPath, 'utf8'), { schema: configSchema }) as PatchEntry[])
       .flatMap(entry => entry.insert ?? [entry])
     const baseRow = baseRows.find(row => row.id === 'session-query-sqlite')
-    const webRow = webRows.find(row => row.id === 'session-query-sqlite')
+    const guiRow = guiRows.find(row => row.id === 'session-query-sqlite')
     expect(baseRow?.config?.openAt).toBe('never')
     expect(baseRow?.disabled).toBeUndefined()
-    // The web restatement keeps the shipped default; opting in is a later layer's override.
-    expect(webRow?.config?.openAt).toBe('never')
-    expect(webRow?.disabled).toBeUndefined()
+    // The shared GUI restatement keeps the shipped default; opting in is a later layer's override.
+    expect(guiRow?.config?.openAt).toBe('never')
+    expect(guiRow?.disabled).toBeUndefined()
+    expect(webRows.find(row => row.id === 'session-query-sqlite')).toBeUndefined()
 
     const cwd = await mkdtemp(join(tmpdir(), 'dsh-cli-lazy-search-'))
     try {

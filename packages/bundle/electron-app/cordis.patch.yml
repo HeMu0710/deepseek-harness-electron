@@ -1,0 +1,13 @@
+# The dsh-electron-app surface patch over dsh-base + dsh-gui-app. Web startup,
+# HTTP serving, Web runtime glue, and client HMR belong only to dsh-web-app and
+# therefore never enter this composition. The desktop app supplies its own
+# renderer carrier and process lifecycle outside this Cordis tree.
+
+- insert:
+    # Desktop windows always have an attended local OS interaction, so pin both
+    # halves instead of mounting the Web bind/display chooser.
+    - id: directory-picker
+      name: '@deepseek-ai/dsh-host-directory-picker-native'
+
+    - id: ui-directory-picker-native
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-native'

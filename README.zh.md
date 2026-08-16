@@ -34,6 +34,14 @@ pnpm run build
 pnpm dsh web
 ```
 
+同一份源码在构建后也可以运行零端口 Electron 应用：
+
+```sh
+pnpm desktop
+```
+
+桌面应用复用 GUI profile，但通过本地 IPC 承载 API 与事件流量，不会开启 HTTP 监听端口。开发者预览目前尚不包含安装包和签名。
+
 ## 社区与支持
 
 - 欢迎通过 [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions) 提交反馈或 bug 报告。

@@ -15,6 +15,7 @@
     "@deepseek-ai/dsh-agent-loop": "workspace:^",
     "@deepseek-ai/dsh-agent-spine-demo": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "workspace:^",
+    "@deepseek-ai/dsh-atomic-write": "workspace:^",
     "@deepseek-ai/dsh-attachment": "workspace:^",
     "@deepseek-ai/dsh-shell": "workspace:^",
     "@deepseek-ai/dsh-shell-env": "workspace:^",

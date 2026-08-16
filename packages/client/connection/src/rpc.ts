@@ -56,6 +56,14 @@ export interface HostConnectionRpc {
 export interface HostConnectionHandle {
   /** Generic RPC channel registry. */
   readonly rpc: HostConnectionRpc
+  /**
+   * Dispatch one Fetch request through the registered logical channels and the
+   * API Proxy fallback. This entry is local-transport trusted: browser Host,
+   * Origin, and channel-authority checks belong to the Web adapter before it.
+   * @param request - complete request reconstructed by the active Host carrier.
+   * @returns the carrier-style response, including streaming bodies.
+   */
+  fetch(request: Request): Promise<Response>
 }
 
 /** Client caller for logical RPC channels carried by the current transport. */

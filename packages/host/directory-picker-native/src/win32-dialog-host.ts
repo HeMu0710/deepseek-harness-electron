@@ -18,10 +18,18 @@ import type { Win32DialogWorkerData } from './win32-dialog-worker.ts'
  * the child's first window, so Windows activates it without a foreground
  * call.
  * @param data - the child payload (dialog title).
+ * @param electronProcess - whether `process.execPath` needs Electron's Node mode.
  * @returns the spawned child process.
  */
-export function spawnDialogWorker(data: Win32DialogWorkerData): ReturnType<typeof spawn> {
-  const env = { ...process.env, DSH_DIALOG_TITLE: data.title }
+export function spawnDialogWorker(
+  data: Win32DialogWorkerData,
+  electronProcess = process.versions.electron !== undefined,
+): ReturnType<typeof spawn> {
+  const env = {
+    ...process.env,
+    DSH_DIALOG_TITLE: data.title,
+    ...electronProcess ? { ELECTRON_RUN_AS_NODE: '1' } : {},
+  }
   const stdio: StdioOptions = ['ignore', 'inherit', 'inherit', 'ipc']
   /* v8 ignore next 3 -- the built-output arm: tests always run unbuilt (src/) */
   if (!import.meta.url.endsWith('.ts')) {

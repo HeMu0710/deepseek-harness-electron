@@ -380,8 +380,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   },
   {
     key: 'clientModules',
-    summary: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap.',
-    description: 'The web plugin table service: incremental `dsh.client` scan + wire composition + bundle route + index tap. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it).',
+    summary: 'Host client-bundle inventory: incremental `dsh.client` scan, graph composition, and bundle-path resolution.',
+    description: 'Host client-bundle inventory: incremental `dsh.client` scan, graph composition, and bundle-path resolution. Construction runs the activation scan synchronously — a malformed declaration or missing bundle among the already-loaded entries aggregates into one loud throw (FAILED fiber; the boot activation audit reports it). A WebServer child registration adds the Web bundle route and index-manifest injection whenever that service is active; inventory activation does not require an HTTP carrier.',
     methods: [
       {
         signature: 'graph(): WebBootGraph',
@@ -972,7 +972,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'abstract confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv',
         description: 'Wrap `argv` so it executes confined under `policy` on this host; the caller spawns the returned argv in place of its own.',
         parameters: [{ name: 'argv', description: 'the exact argv the caller is about to spawn (program plus arguments), NOT a shell string — a shell-shaped consumer passes `[\'bash\', \'-c\', command]`.' }, { name: 'policy', description: 'the file-effect policy this execution runs under, carried per call (see {@link SandboxPolicy}).' }],
-        returns: 'the argv to spawn instead, plus the enforcement completeness the selected backend achieves for it.',
+        returns: 'the argv to spawn instead, any environment entries required only for that runner launch, and the enforcement completeness the selected backend achieves for it.',
       },
     ],
   },
@@ -2823,7 +2823,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConfinedArgv',
-    declaration: 'export interface ConfinedArgv {\n    argv: string[];\n    enforcement: SandboxEnforcement;\n    denialSignatures: readonly string[];\n    runnerFailureRules: readonly RunnerFailureRule[];\n}',
+    declaration: 'export interface ConfinedArgv {\n    argv: string[];\n    runnerEnv?: Record<string, string>;\n    enforcement: SandboxEnforcement;\n    denialSignatures: readonly string[];\n    runnerFailureRules: readonly RunnerFailureRule[];\n}',
   },
   {
     name: 'ConfinedSandboxMode',

@@ -34,8 +34,10 @@
  * flows the runner rewrites TMP/TEMP in its OWN environment to the private
  * directory before spawning; the child inherits that block (`lpEnvironment`
  * NULL; an explicit block through koffi trips ERROR_INVALID_PARAMETER in
- * CreateProcessAsUserW, verified empirically). Read-only leaves the ambient
- * temp entries untouched (writes there are denied anyway).
+ * CreateProcessAsUserW, verified empirically). The Electron-only
+ * `ELECTRON_RUN_AS_NODE` launcher entry is removed before spawning the child.
+ * Read-only leaves the ambient temp entries untouched (writes there are
+ * denied anyway).
  *
  * Failure contract: every runner-side failure (bad args, missing
  * directories, token/grant/spawn errors) prints `windows-acl-run: <detail>`
@@ -178,6 +180,7 @@ async function main(): Promise<number> {
       }
     }
 
+    delete process.env.ELECTRON_RUN_AS_NODE
     const child = sandbox.spawn({
       command: parsed.command,
       args: parsed.args,

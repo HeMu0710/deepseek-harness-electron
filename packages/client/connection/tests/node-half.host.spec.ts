@@ -259,6 +259,91 @@ describe('connection node half', () => {
     expect(routes).toHaveLength(0)
   })
 
+  it('provides the Host dispatcher without mounting a Web adapter', async () => {
+    const ctx = new Context()
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const connection = ctx.get('connection') as HostConnectionHandle
+    const calls: unknown[] = []
+    const remove = connection.rpc.handle('/rpc', async (endpoint, payload) => {
+      calls.push({ endpoint, payload })
+      return { ok: true, value: { carrier: 'desktop' } }
+    }, { authority: 'loopback' })
+    const body: ClientRequest = {
+      type: 'client-request',
+      rpcId: RpcId('rpc-desktop'),
+      method: 'goals/create',
+      payload: { objective: 'local dispatch' },
+    }
+    const response = await connection.fetch(new Request('http://dsh.internal/rpc/goals/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      type: 'server-response',
+      rpcId: 'rpc-desktop',
+      result: { ok: true, value: { carrier: 'desktop' } },
+    })
+    expect(calls).toEqual([{
+      endpoint: 'goals/create',
+      payload: { objective: 'local dispatch' },
+    }])
+
+    await remove()
+    await expect(connection.fetch(new Request('http://dsh.internal/rpc/goals/create')))
+      .resolves.toMatchObject({ status: 404 })
+
+    const removeInterceptor = connection.rpc.intercept(
+      '/api',
+      endpoint => endpoint === 'goals/create',
+      async () => ({ ok: true, value: { carrier: 'desktop-interceptor' } }),
+      { authority: 'loopback' },
+    )
+    const intercepted = await connection.fetch(new Request('http://dsh.internal/api/goals/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...body, rpcId: RpcId('rpc-desktop-interceptor') }),
+    }))
+    expect(await intercepted.json()).toMatchObject({
+      rpcId: 'rpc-desktop-interceptor',
+      result: { ok: true, value: { carrier: 'desktop-interceptor' } },
+    })
+    await removeInterceptor()
+    for (const pathname of ['/api/unclaimed', '/rpc', '/bad!/endpoint']) {
+      await expect(connection.fetch(new Request(`http://dsh.internal${pathname}`)))
+        .resolves.toMatchObject({ status: 404 })
+    }
+    await fiber.dispose()
+  })
+
+  it('rolls back a logical RPC channel when its optional Web mount fails', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    const connection = ctx.get('connection') as HostConnectionHandle
+    const occupied: WebRoute = {
+      kind: 'prefix',
+      path: '/blocked',
+      handler: async () => undefined,
+    }
+    routes.push(occupied)
+    expect(() => connection.rpc.handle('/blocked', async () => ({ ok: true, value: null }), {
+      authority: 'loopback',
+    })).toThrow('duplicate route /blocked')
+
+    routes.splice(routes.indexOf(occupied), 1)
+    const remove = connection.rpc.handle('/blocked', async () => ({ ok: true, value: null }), {
+      authority: 'loopback',
+    })
+    expect(routes.some(route => route.path === '/blocked')).toBe(true)
+    await remove()
+    await fiber.dispose()
+  })
+
   it('dispatches claimed /api endpoints before the API Proxy fallback and withdraws the claim', async () => {
     const ctx = new Context()
     const routes: WebRoute[] = []

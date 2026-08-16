@@ -32,6 +32,42 @@ async function eventually(test: () => boolean, message: string): Promise<void> {
 }
 
 describe('HMR exact config paths', () => {
+  it('keeps exact config watching active without Loader internals', { timeout: 20_000 }, async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-hmr-config-only-'))
+    const filename = join(dir, 'plugins.yml')
+    const ctx = new Context()
+    ctx.baseUrl = pathToFileURL(dir).href + '/'
+    await ctx.plugin(Loader)
+    ctx.loader.internal = undefined
+    await ctx.plugin(Timer)
+    await ctx.plugin(Hmr, { root: [], ignored: [], debounce: 0 })
+    const observed: string[] = []
+    try {
+      await ctx.hmr.registerConfig(filename, () => {
+        observed.push(readFileSync(filename, 'utf8'))
+      })
+      writeFileSync(filename, 'config-only')
+      await eventually(() => observed.includes('config-only'), 'config-only HMR did not observe the exact path')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects module roots without Loader internals', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-hmr-module-internals-'))
+    const ctx = new Context()
+    ctx.baseUrl = pathToFileURL(dir).href + '/'
+    await ctx.plugin(Loader)
+    ctx.loader.internal = undefined
+    await ctx.plugin(Timer)
+    try {
+      await expect(ctx.plugin(Hmr, { root: ['.'], ignored: [], debounce: 0 }))
+        .rejects.toThrow('Node internal module loader is required for module HMR')
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
   it('observes module changes when its watch base is a filesystem alias', { timeout: 30_000 }, async () => {
     const target = mkdtempSync(join(tmpdir(), 'dsh-hmr-module-canonical-'))
     const alias = `${target}-alias`

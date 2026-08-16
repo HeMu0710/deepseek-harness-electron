@@ -1,5 +1,5 @@
 /**
- * Browser wire client. The plugin selects fixture or HTTP transport, provides
+ * Renderer wire client. The plugin selects fixture, desktop, or Web transport; provides
  * the shared API client, and lets the runtime object layer start the stream
  * controller with its sinks.
  */
@@ -8,7 +8,8 @@ import type { HostDescription, IApiClient } from './api.ts'
 import { ConnectionController, type ConnectionConfig, type ConnectionSinks, type ConnectionState } from './connection.ts'
 import { FixtureApiClient } from './fixture.ts'
 import { WebApiClient } from './web-api-client.ts'
-import { createWebConnectionRpc } from './rpc.ts'
+import { createDesktopFetch, desktopBridgeFromGlobal, DesktopApiClient } from './desktop-api-client.ts'
+import { createConnectionRpc } from './rpc.ts'
 import { isLoopbackHostname } from '../loopback-hostname.ts'
 import type { ClientConnectionRpc } from '../rpc.ts'
 
@@ -35,6 +36,22 @@ export {
   AbstractApiClient,
   transportError,
 } from './api.ts'
+export type {
+  DesktopBridge,
+  DesktopFetch,
+  DesktopFetchChunk,
+  DesktopFetchHead,
+  DesktopFetchMethod,
+  DesktopFetchRequest,
+  DesktopRequestId,
+} from './desktop-api-client.ts'
+export {
+  createDesktopFetch,
+  desktopBridgeFromGlobal,
+  DesktopApiClient,
+} from './desktop-api-client.ts'
+export type { ConnectionFetch } from './rpc.ts'
+export { createConnectionRpc } from './rpc.ts'
 
 // Connection loop types are public through ConnectionHandle.start; the
 // controller remains package-internal.
@@ -58,7 +75,7 @@ export const inject: string[] = []
  * is ready — connection stays consumer-agnostic).
  */
 export interface ConnectionHandle {
-  /** Shared api client (fixture or real, decided at boot from the page URL). */
+  /** Shared API client selected from fixture, desktop bridge, or Web transport. */
   readonly api: IApiClient
   /** Whether the current page authority is loopback; non-browser contexts default to true. */
   readonly isLoopback: boolean
@@ -78,15 +95,18 @@ export interface ConnectionHandle {
 }
 
 /**
- * Client plugin body: pick the api by page mode and provide ctx.connection.
+ * Client plugin body: select one transport and provide ctx.connection.
  * @param ctx - client cordis context.
  */
 export function apply(ctx: Context): void {
   const pageLocation = typeof location === 'undefined' ? undefined : location
   const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
   const fixtureClient = fixture ? new FixtureApiClient() : undefined
-  const api: IApiClient = fixtureClient ?? new WebApiClient()
-  const rpc = fixtureClient?.rpc ?? createWebConnectionRpc()
+  const desktopBridge = fixture ? undefined : desktopBridgeFromGlobal()
+  const desktopFetch = desktopBridge === undefined ? undefined : createDesktopFetch(desktopBridge)
+  const api: IApiClient = fixtureClient
+    ?? (desktopFetch === undefined ? new WebApiClient() : new DesktopApiClient(desktopFetch))
+  const rpc = fixtureClient?.rpc ?? createConnectionRpc(desktopFetch)
   let started = false
   let description: HostDescription | undefined
   const descriptionListeners = new Set<() => void>()
@@ -103,7 +123,9 @@ export function apply(ctx: Context): void {
   }
   const handle: ConnectionHandle = {
     api,
-    isLoopback: pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    isLoopback: desktopBridge !== undefined
+      || pageLocation === undefined
+      || isLoopbackHostname(pageLocation.hostname),
     hostDescription: {
       getSnapshot: () => description,
       subscribe: (listener) => {

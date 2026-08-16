@@ -24,6 +24,9 @@
       "path": "../../../vendor/hmr"
     },
     {
+      "path": "../../util/atomic-write"
+    },
+    {
       "path": "../../runtime-diagnostics/invariants"
     },
     {

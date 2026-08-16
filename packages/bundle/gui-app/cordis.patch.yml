@@ -1,0 +1,263 @@
+# The dsh-gui-app bundle patch: shared Host services and client roster for GUI
+# surfaces over dsh-base. A surface bundle follows this layer with its carrier,
+# startup integration, and directory-picker interaction.
+#
+# A patch replaces the targeted row's whole `config`, so each row below
+# restates every key it owns.
+
+# ── GUI values the base deliberately omits ──────────────────────────────────
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+# TODO: Re-enable shared HMR after its GUI lifecycle is tested.
+- id: hmr
+  disabled: true
+
+# Full-text session search remains opt-in. A later deployment patch can set
+# `openAt` to `first-search` without changing the shared GUI roster.
+- id: session-query-sqlite
+  config:
+    path: ':memory:'
+    openAt: never
+
+- id: tools
+  config:
+    # TEMPORARY workaround: DSH_TOOLS_MODE (native|code|both) opts a whole dsh
+    # process into Code Mode while per-session selection is being designed.
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+# ── transport-independent Host services and client roster ──────────────────
+
+# `dsh.client` rows are the roster the modules Host half scans into the boot
+# graph. The surface layer supplies the carrier that retrieves those bundles.
+- insert:
+    - id: code-runtime
+      name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+
+    - id: storage
+      name: '@deepseek-ai/dsh-storage'
+
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath('storages')
+
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config:
+        backend: json
+
+    - id: message-feedback
+      name: '@deepseek-ai/dsh-message-feedback'
+      config:
+        maxNoteBytes: 8192
+
+    - id: session-log-download
+      name: '@deepseek-ai/dsh-session-log-export'
+
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
+    - id: session-projection-cache
+      name: '@deepseek-ai/dsh-session-projection-cache'
+      config:
+        writeEveryEvents: 200
+        writeIntervalMs: 5000
+
+    - id: session-stats
+      name: '@deepseek-ai/dsh-session-stats'
+
+    - id: plugin-inventory
+      name: '@deepseek-ai/dsh-host-plugin-inventory'
+
+    - id: api-gateway
+      name: '@deepseek-ai/dsh-host-apiproxy'
+
+    - id: cordis-host-runner
+      name: '@deepseek-ai/dsh-cordis-host-runner'
+
+    # The surface layer supplies this row's Host carrier prerequisites and
+    # deployment config while its client half remains one shared roster entry.
+    - id: connection
+      name: '@deepseek-ai/dsh-client-connection'
+
+    - id: modules
+      name: '@deepseek-ai/dsh-client-modules'
+
+    - id: api-remotes
+      name: '@deepseek-ai/dsh-api-remotes'
+
+    - id: client-runtime
+      name: '@deepseek-ai/dsh-client-runtime'
+
+    - id: cordis-client-runner
+      name: '@deepseek-ai/dsh-cordis-client-runner'
+
+    - id: ui-theme
+      name: '@deepseek-ai/dsh-client-ui-theme'
+
+    - id: locale
+      name: '@deepseek-ai/dsh-client-locale'
+
+    - id: ui-layout
+      name: '@deepseek-ai/dsh-client-ui-layout'
+
+    - id: ui-sidebar
+      name: '@deepseek-ai/dsh-client-ui-sidebar'
+
+    - id: ui-settings
+      name: '@deepseek-ai/dsh-client-ui-settings'
+
+    - id: ui-settings-general
+      name: '@deepseek-ai/dsh-client-ui-settings-general'
+
+    - id: ui-settings-models
+      name: '@deepseek-ai/dsh-client-ui-settings-models'
+
+    - id: ui-settings-plugin-inventory
+      name: '@deepseek-ai/dsh-client-ui-settings-plugin-inventory'
+
+    - id: ui-conversation
+      name: '@deepseek-ai/dsh-client-ui-conversation'
+
+    - id: ui-tool
+      name: '@deepseek-ai/dsh-client-ui-tool'
+
+    - id: ui-cordis
+      name: '@deepseek-ai/dsh-client-ui-cordis'
+
+    - id: ui-workflow-run
+      name: '@deepseek-ai/dsh-client-ui-workflow-run'
+
+    - id: ui-deliverables
+      name: '@deepseek-ai/dsh-client-ui-deliverables'
+
+    - id: ui-workspace
+      name: '@deepseek-ai/dsh-client-ui-workspace'
+
+    - id: ui-input-trigger
+      name: '@deepseek-ai/dsh-client-ui-input-trigger'
+
+    - id: ui-commands
+      name: '@deepseek-ai/dsh-client-ui-commands'
+
+    - id: ui-skill
+      name: '@deepseek-ai/dsh-client-ui-skill'
+
+    - id: ui-subagent
+      name: '@deepseek-ai/dsh-client-ui-subagent'
+
+    - id: ui-jobs
+      name: '@deepseek-ai/dsh-client-ui-jobs'
+
+    - id: ui-goal
+      name: '@deepseek-ai/dsh-client-ui-goal'
+
+    - id: ui-message-feedback
+      name: '@deepseek-ai/dsh-client-ui-message-feedback'
+
+    - id: ui-model-selection
+      name: '@deepseek-ai/dsh-client-ui-model-selection'
+
+    - id: ui-permission
+      name: '@deepseek-ai/dsh-client-ui-permission-presets'
+
+    - id: ui-agent-preset
+      name: '@deepseek-ai/dsh-client-ui-agent-preset'
+
+    - id: ui-settings-plugins
+      name: '@deepseek-ai/dsh-client-ui-settings-plugins'
+
+    - id: ui-plan
+      name: '@deepseek-ai/dsh-client-ui-plan'
+
+    - id: ui-user-questions
+      name: '@deepseek-ai/dsh-client-ui-user-questions'
+
+    - id: ui-trajectory
+      name: '@deepseek-ai/dsh-client-ui-trajectory'
+
+# ── the agent plane moves behind Agent Presets ──────────────────────────────
+#
+# The base keeps model-facing rows in the process plane for the single-session
+# TUI. GUI sessions instead mount one selected preset. Process-wide registries
+# and Host RPC owners remain in the shared plane; only per-agent contributors
+# below are disabled.
+
+- id: tool-bash
+  disabled: true
+
+- id: tool-pwsh
+  disabled: true
+
+- id: tool-jobs
+  disabled: true
+
+- id: tool-fs
+  disabled: true
+
+- id: tool-fs-search
+  disabled: true
+
+- id: tool-str-replace-editor
+  disabled: true
+
+- id: skill-filesystem
+  disabled: true
+
+- id: tool-skill
+  disabled: true
+
+- id: tool-goal
+  disabled: true
+
+- id: plan-mode
+  disabled: true
+
+- id: compaction-basic
+  disabled: true
+
+- id: command-compact
+  disabled: true
+
+- id: tool-result-pruner
+  disabled: true
+
+- id: tool-subagent-control
+  disabled: true
+
+- id: tool-subagent-list-agents
+  disabled: true
+
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
+- id: workflow-worker-thread
+  disabled: true
+
+- id: tool-workflow
+  disabled: true
+
+- id: tool-ralph
+  disabled: true
+
+- id: agent-instructions
+  disabled: true
+
+- id: tool-todo
+  disabled: true
+
+- id: tool-web
+  disabled: true
+
+- insert:
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard

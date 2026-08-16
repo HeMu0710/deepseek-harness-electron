@@ -34,6 +34,14 @@ pnpm run build
 pnpm dsh web
 ```
 
+The same checkout can run the zero-port Electron application after the build:
+
+```sh
+pnpm desktop
+```
+
+The desktop application reuses the GUI profile but carries API and event traffic over local IPC; it does not open an HTTP listening port. Packaged installers and signing are not included in the developer preview yet.
+
 ## Community and support
 
 - Feel free to submit feedback or bug reports through [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions).

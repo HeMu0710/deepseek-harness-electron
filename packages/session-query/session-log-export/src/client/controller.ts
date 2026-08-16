@@ -19,6 +19,7 @@ export interface SessionLogDownloadState {
 
 type Fetch = (input: string | URL, init?: RequestInit) => Promise<Response>
 type Save = (url: string, filename: string) => void
+type DesktopSave = (url: string, filename: string) => Promise<boolean>
 
 const INITIAL: SessionLogDownloadState = { bySession: {} }
 
@@ -53,6 +54,17 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Read the desktop save operation without exposing Electron objects to this plugin. */
+function desktopSaveFromGlobal(): DesktopSave | undefined {
+  const desktop = (globalThis as { __DSH_DESKTOP__?: { saveDownload?: unknown } }).__DSH_DESKTOP__
+  if (desktop === undefined) return undefined
+  if (typeof desktop.saveDownload !== 'function') {
+    throw new Error('session-log-download: desktop bridge must provide saveDownload')
+  }
+  const saveDownload = desktop.saveDownload as DesktopSave
+  return (url, filename) => saveDownload(url, filename)
+}
+
 /** Owns one in-flight browser download per Session and publishes modal state. */
 export class SessionLogDownloadController {
   /** uSES-safe state source shared by every Session-scoped modal contribution. */
@@ -64,10 +76,12 @@ export class SessionLogDownloadController {
   /**
    * @param fetcher - HTTP carrier used to read the host-streamed ZIP.
    * @param save - browser save operation.
+   * @param desktopSave - Electron save-dialog operation, when present.
    */
   constructor(
     private readonly fetcher: Fetch = (input, init) => fetch(input, init),
     private readonly save: Save = downloadUrl,
+    private readonly desktopSave: DesktopSave | undefined = desktopSaveFromGlobal(),
   ) {}
 
   /**
@@ -114,12 +128,21 @@ export class SessionLogDownloadController {
       const url = new URL('/api/session.export', hostBase())
       url.searchParams.set('sessionId', sessionId)
       url.searchParams.set('includeDescendants', 'true')
-      const response = await this.fetcher(url, { method: 'HEAD', signal })
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '')
-        throw new Error(`Export failed: HTTP ${response.status}${detail === '' ? '' : ` ${detail}`}`)
+      const filename = sessionLogZipFilename(sessionId)
+      if (this.desktopSave !== undefined) {
+        const saved = await this.desktopSave(url.toString(), filename)
+        if (!saved) {
+          this.publish(sessionId, { open: false, status: 'success', error: null })
+          return
+        }
+      } else {
+        const response = await this.fetcher(url, { method: 'HEAD', signal })
+        if (!response.ok) {
+          const detail = await response.text().catch(() => '')
+          throw new Error(`Export failed: HTTP ${response.status}${detail === '' ? '' : ` ${detail}`}`)
+        }
+        this.save(url.toString(), filename)
       }
-      this.save(url.toString(), sessionLogZipFilename(sessionId))
       const open = this.store.getSnapshot().bySession[String(sessionId)]?.open ?? true
       this.publish(sessionId, { open, status: 'success', error: null })
     } catch (error: unknown) {

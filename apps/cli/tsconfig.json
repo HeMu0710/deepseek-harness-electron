@@ -27,6 +27,12 @@
       "path": "../../packages/bundle/base"
     },
     {
+      "path": "../../packages/bundle/gui-app"
+    },
+    {
+      "path": "../../packages/bundle/electron-app"
+    },
+    {
       "path": "../../packages/bundle/headless"
     },
     {

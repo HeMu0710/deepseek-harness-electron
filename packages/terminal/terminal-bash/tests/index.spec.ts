@@ -28,10 +28,17 @@ class EmptySandbox extends SandboxProvider {
 
 class RecordingSandbox extends SandboxProvider {
   calls: { argv: readonly string[]; policy: SandboxPolicy }[] = []
+  runnerEnv: Record<string, string> | undefined
 
   confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
     this.calls.push({ argv, policy })
-    return { argv: ['/sandbox', '--', ...argv], enforcement: 'full', denialSignatures: [], runnerFailureRules: [] }
+    return {
+      argv: ['/sandbox', '--', ...argv],
+      ...this.runnerEnv === undefined ? {} : { runnerEnv: this.runnerEnv },
+      enforcement: 'full',
+      denialSignatures: [],
+      runnerFailureRules: [],
+    }
   }
 }
 
@@ -176,6 +183,7 @@ describe('BashTerminalBackend startup rollback', () => {
   it('wraps confined argv, scrubs the environment, and returns initialized sessions', async () => {
     const ctx = new Context()
     await ctx.plugin(RecordingSandbox)
+    ;(ctx.sandbox as RecordingSandbox).runnerEnv = { ELECTRON_RUN_AS_NODE: '1' }
     await ctx.plugin(SandboxPolicyService, { mode: 'workspace-write', workspaceRoot: '/workspace' })
     const terminal = terminalHandle()
     let spawned: SubprocessTerminalSpawnSpec | undefined
@@ -209,6 +217,7 @@ describe('BashTerminalBackend startup rollback', () => {
       env: {
         TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat', PS1: 'dsh> ', BASH_SILENCE_DEPRECATION_WARNING: '1',
         DSH_SHELL: '1', DSH_SESSION_ID: 'agent', DSH_PTY_SESSION_ID: 'pty-1',
+        ELECTRON_RUN_AS_NODE: '1',
       },
     })
     expect(spawned?.env?.PTY_TEST_SECRET).toBeUndefined()

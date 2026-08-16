@@ -8,10 +8,17 @@ import { apply, type ConnectionHandle } from '../src/client/index.ts'
 import type { RpcMessage } from '../src/client/api.ts'
 import { RpcId } from '../src/client/api.ts'
 import { FixtureApiClient } from '../src/client/fixture.ts'
+import {
+  DesktopApiClient,
+  type DesktopBridge,
+  type DesktopFetchChunk,
+  type DesktopRequestId,
+} from '../src/client/desktop-api-client.ts'
 import { WebApiClient } from '../src/client/web-api-client.ts'
 
 type Win = { location?: { hostname: string; search: string; origin?: string } }
 type WebSocketGlobal = { WebSocket?: typeof WebSocket }
+type DesktopGlobal = { __DSH_DESKTOP__?: DesktopBridge }
 
 const originalWebSocket = globalThis.WebSocket
 const sockets: FakeWebSocket[] = []
@@ -49,6 +56,7 @@ class FakeWebSocket extends EventTarget {
 
 afterEach(() => {
   delete (globalThis as Win).location
+  delete (globalThis as DesktopGlobal).__DSH_DESKTOP__
   sockets.length = 0
   if (originalWebSocket === undefined) delete (globalThis as WebSocketGlobal).WebSocket
   else globalThis.WebSocket = originalWebSocket
@@ -82,6 +90,55 @@ describe('connection client apply', () => {
   it('reports non-loopback page authority through the connection handle', async () => {
     ;(globalThis as Win).location = { hostname: '192.0.2.20', search: '' }
     expect((await mount()).isLoopback).toBe(false)
+  })
+
+  it('selects the fixed desktop bridge and shares its fetch carrier with generic RPC', async () => {
+    ;(globalThis as Win).location = { hostname: 'app', search: '', origin: 'dsh://app' }
+    const bodies = new Map<DesktopRequestId, Uint8Array[]>()
+    const fetchRequests: Array<{ url: string; method: string }> = []
+    const bridge: DesktopBridge = {
+      async fetch(request) {
+        fetchRequests.push({ url: request.url, method: request.method })
+        const message = JSON.parse(new TextDecoder().decode(request.body)) as { rpcId: string }
+        bodies.set(request.id, [new TextEncoder().encode(JSON.stringify({
+          type: 'server-response',
+          rpcId: message.rpcId,
+          result: { ok: true, value: { ref: 'desktop-value' } },
+        }))])
+        return {
+          id: request.id,
+          status: 200,
+          statusText: 'OK',
+          headers: [['content-type', 'application/json']],
+          hasBody: true,
+        }
+      },
+      async pull(id): Promise<DesktopFetchChunk> {
+        const value = bodies.get(id)?.shift()
+        if (value !== undefined) return { type: 'chunk', value }
+        bodies.delete(id)
+        return { type: 'end' }
+      },
+      async cancel(id) { bodies.delete(id) },
+    }
+    ;(globalThis as DesktopGlobal).__DSH_DESKTOP__ = bridge
+    const webFetch = vi.spyOn(globalThis, 'fetch')
+    try {
+      const handle = await mount()
+      expect(handle.api).toBeInstanceOf(DesktopApiClient)
+      expect(handle.isLoopback).toBe(true)
+
+      await expect(handle.rpc.call('/api', 'goals/create', {}))
+        .resolves.toEqual({ ok: true, value: { ref: 'desktop-value' } })
+      await handle.api.host.describe({}).catch(() => undefined)
+      expect(fetchRequests).toEqual([
+        { url: 'dsh://app/api/goals/create', method: 'POST' },
+        { url: 'dsh://app/api/host.describe', method: 'POST' },
+      ])
+      expect(webFetch).not.toHaveBeenCalled()
+    } finally {
+      webFetch.mockRestore()
+    }
   })
 
   it('start() hands out one loop, rejects a second consumer, and stop() aborts the streams', async () => {
@@ -326,7 +383,8 @@ describe('connection client apply', () => {
     const handle = await mount()
     const original = globalThis.fetch
     const abort = new AbortController()
-    globalThis.fetch = vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 }))
+    const cancel = vi.fn()
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response(new ReadableStream({ cancel }), { status: 503 }))
     try {
       await expect(handle.rpc.call('/api', 'goals/create', {}, abort.signal))
         .rejects.toThrow('HTTP 503')
@@ -334,6 +392,7 @@ describe('connection client apply', () => {
         new URL('https://harness.example/api/goals/create'),
         expect.objectContaining({ signal: abort.signal }),
       )
+      expect(cancel).toHaveBeenCalledOnce()
 
       ;(globalThis as Win).location = { hostname: 'localhost', search: '', origin: 'null' }
       globalThis.fetch = vi.fn().mockResolvedValue(Response.json({

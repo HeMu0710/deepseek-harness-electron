@@ -1,11 +1,11 @@
 /**
- * Node half of the client module system (`dsh.client` dual-face package): scans
- * the host Loader's entries for packages declaring `dsh.client`, composes the
- * `window.__DSH_BOOT__` entry graph (wire single source: {@link WebBootEntry}
- * in `./client/manifest.ts`), serves `/plugins/<id>/client.js` and its source
- * map, taps the index render to inject the boot manifest, and provides the
- * `clientModuleHost` service (the HMR node half's registration/notification
- * face).
+ * Host half of the client module system (`dsh.client` dual-face package):
+ * scans the Loader's entries for packages declaring `dsh.client`, composes the
+ * client entry graph (wire single source: {@link WebBootEntry} in
+ * `./client/manifest.ts`), resolves bundle paths, and provides the
+ * `clientModules` inventory service. While a WebServer is active, a child
+ * registration installs the existing `/plugins` bundle route and
+ * index-manifest injection for the Web carrier.
  *
  * Scanning is incremental per package — there is no full-rescan code path.
  * Every cordis `internal/plugin` emission (fiber construction/disposal) marks
@@ -38,7 +38,7 @@ export type {
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** The web plugin table (provided by the client-modules node half). */
+    /** The host client-bundle inventory (provided by the client-modules host half). */
     clientModules: ClientModuleRegistry
   }
 }
@@ -99,8 +99,8 @@ class ClientPackageCompositionError extends AggregateError {
   }
 }
 
-/** One composed table row: the wire entry plus its bundle path. */
-interface WebPluginRecord {
+/** One composed inventory row: the wire entry plus its bundle path. */
+interface ClientPluginRecord {
   entry: WebBootEntry
   clientPath: string
 }
@@ -163,11 +163,15 @@ function graphRow(id: string, rev: string, injectEdges: string[] | undefined, im
  * the JSON so plugin-controlled strings cannot break out of the script element.
  * @param html - the index.html source.
  * @param graph - the composed entry graph.
+ * @param nonce - optional CSP nonce for carriers that forbid unmarked inline scripts.
  * @returns the html with the graph script injected.
  */
-export function injectBootManifest(html: string, graph: WebBootGraph): string {
+export function injectBootManifest(html: string, graph: WebBootGraph, nonce?: string): string {
+  if (nonce !== undefined && !/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) {
+    throw new Error('client-modules: boot manifest nonce must be base64url text')
+  }
   const json = JSON.stringify(graph).replaceAll('<', '\\u003c')
-  const script = `<script>window.__DSH_BOOT__ = ${json}</script>`
+  const script = `<script${nonce === undefined ? '' : ` nonce="${nonce}"`}>window.__DSH_BOOT__ = ${json}</script>`
   const head = html.indexOf('<head>')
   if (head !== -1) return `${html.slice(0, head + 6)}${script}${html.slice(head + 6)}`
   // Headless fixture pages may lack <head>; prepending keeps the read-before-shell ordering.
@@ -175,16 +179,18 @@ export function injectBootManifest(html: string, graph: WebBootGraph): string {
 }
 
 /**
- * The web plugin table service: incremental `dsh.client` scan + wire composition
- * + bundle route + index tap. Construction runs the activation scan
- * synchronously — a malformed declaration or missing bundle among the
+ * Host client-bundle inventory: incremental `dsh.client` scan, graph
+ * composition, and bundle-path resolution. Construction runs the activation
+ * scan synchronously — a malformed declaration or missing bundle among the
  * already-loaded entries aggregates into one loud throw (FAILED fiber; the
- * boot activation audit reports it).
+ * boot activation audit reports it). A WebServer child registration adds the
+ * Web bundle route and index-manifest injection whenever that service is
+ * active; inventory activation does not require an HTTP carrier.
  */
 export class ClientModuleRegistry extends Service {
-  static inject = ['webServer', 'loader']
+  static inject = ['loader']
 
-  private readonly table = new Map<string, WebPluginRecord>()
+  private readonly table = new Map<string, ClientPluginRecord>()
   // Negative verdicts (unresolvable specifier — builtins like cordis:include,
   // subpath rows — or a package without a web `dsh.client` declaration) are
   // cached as null and never expire: plugin-set changes take effect on restart.
@@ -198,7 +204,7 @@ export class ClientModuleRegistry extends Service {
 
   /**
    * Build the service: subscribe, seed, and run the activation flush.
-   * @param ctx - plugin context carrying webServer and loader.
+   * @param ctx - plugin context carrying the Loader; a child registration waits for WebServer.
    */
   constructor(ctx: Context) {
     super(ctx, 'clientModules')
@@ -238,14 +244,16 @@ export class ClientModuleRegistry extends Service {
       throw new ClientPackageCompositionError(failures)
     }
 
-    ctx.effect(
-      () => ctx.webServer.register({ kind: 'prefix', path: '/plugins', handler: this.serveBundle }),
-      'client-modules: bundle route',
-    )
-    ctx.effect(
-      () => ctx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
-      'client-modules: boot manifest injection',
-    )
+    ctx.inject(['webServer'], (httpCtx) => {
+      httpCtx.effect(
+        () => httpCtx.webServer.register({ kind: 'prefix', path: '/plugins', handler: this.serveBundle }),
+        'client-modules: bundle route',
+      )
+      httpCtx.effect(
+        () => httpCtx.webServer.tapIndex(html => injectBootManifest(html, this.composed)),
+        'client-modules: boot manifest injection',
+      )
+    })
   }
 
   /**

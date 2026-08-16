@@ -149,6 +149,31 @@ describe('helpers (pure)', () => {
   })
 })
 
+describe('runner environment hand-off', () => {
+  it('overlays provider entries on foreground and background runner spawns without requiring pwsh', async () => {
+    const runner = 'process.stdout.write(`${process.env.ELECTRON_RUN_AS_NODE}:${process.env.DSH_RUNNER_ENV}`)'
+    const { executor } = await setup(() => ({
+      argv: [process.execPath, '-e', runner],
+      runnerEnv: { ELECTRON_RUN_AS_NODE: '1', DSH_RUNNER_ENV: 'provider' },
+      enforcement: 'full',
+      denialSignatures: [],
+      runnerFailureRules: [],
+    }))
+    const request = {
+      command: 'echo never reaches pwsh',
+      env: { DSH_RUNNER_ENV: 'caller' },
+      sandboxPolicy: { mode: 'read-only' as const, workspaceRoot: '/ws' },
+    }
+
+    const foreground = await executor.run(executor.resolve(request))
+    expect(foreground.stdout.text).toBe('1:provider')
+
+    const background = executor.start(executor.resolve(request))
+    await background.done
+    expect(background.readOutput().delta).toBe('1:provider')
+  })
+})
+
 describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
   // Denial device for the POSIX classification cases: a mode-0555 directory
   // INSIDE a temp scratch tree (the same device as bash-sandbox's suites) —

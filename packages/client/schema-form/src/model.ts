@@ -11,13 +11,27 @@ import Schema from '@deepseek-ai/schemastery'
 /** Live schemastery node; the renderer reads only its structural relations. */
 export type SchemaNode = Schema
 
+const identityTransform = (value: unknown): unknown => value
+
+function inertSchemaEnvelope(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(inertSchemaEnvelope)
+  if (typeof value !== 'object' || value === null) return value
+  const result: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    result[key] = key === 'callback' && typeof item === 'string'
+      ? identityTransform
+      : inertSchemaEnvelope(item)
+  }
+  return result
+}
+
 /**
- * Rehydrate a serialized schema envelope into a live validator/node tree.
+ * Rehydrate a serialized schema envelope into an inert structural validator/node tree.
  * @param serialized - `schema.toJSON()` output received over the wire.
- * @returns the root schema node.
+ * @returns the root schema node with serialized callbacks replaced by identity transforms.
  */
 export function rehydrateSchema(serialized: unknown): SchemaNode {
-  return new Schema(serialized as Schema)
+  return new Schema(inertSchemaEnvelope(serialized) as Schema)
 }
 
 /**

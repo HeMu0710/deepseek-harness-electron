@@ -57,6 +57,11 @@
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "react": "^18.2.0"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/dsh-api-remotes": "workspace:^",

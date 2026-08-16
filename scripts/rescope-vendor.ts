@@ -104,7 +104,32 @@ const GENERIC_SKIPS: readonly GenericSkip[] = [
   // GROUP_ORDER holds `packages/<group>/` directory names, not package names.
   { file: 'scripts/gen-module-graph.ts', upstream: ['cordis'] },
   { file: 'scripts/gen-doc-graphs.ts', upstream: ['cordis'] },
+  // Bare `cordis` values in these files are product ids, locale namespaces,
+  // translation keys, or catalog groups rather than framework package names.
+  { file: 'packages/client/ui-settings-plugin-inventory/src/client/PluginInventorySettingsTab.tsx', upstream: ['cordis'] },
+  { file: 'packages/extensions/ui-cordis/src/client/CordisActionRow.tsx', upstream: ['cordis'] },
+  { file: 'packages/extensions/ui-cordis/src/client/CordisDefineRow.tsx', upstream: ['cordis'] },
+  { file: 'packages/extensions/ui-cordis/src/client/CordisPanel.tsx', upstream: ['cordis'] },
+  { file: 'packages/extensions/ui-cordis/src/client/CordisRunRow.tsx', upstream: ['cordis'] },
+  { file: 'packages/extensions/ui-cordis/src/client/index.ts', upstream: ['cordis'] },
+  { file: 'packages/extensions/ui-cordis/src/client/locales.ts', upstream: ['cordis'] },
+  { file: 'scripts/gen-cordis-catalog.ts', upstream: ['cordis'] },
+  { file: 'scripts/package-macos-app.ts', upstream: ['cordis'] },
+  // Classifier fixtures intentionally carry both mapping directions.
+  { file: 'scripts/rescope-vendor.spec.ts', upstream: ['cordis'] },
 ]
+
+/** Complete Harness runtime identifiers that share the upstream package prefix. */
+const FORWARD_RUNTIME_IDENTIFIERS = new Set([
+  'cordis/',
+  'cordis/*',
+  'cordis/dynamic-package',
+  'cordis/dynamic-retract',
+  'cordis/inspect-query',
+  'cordis/inspect-query-resolved',
+  'cordis/request-run',
+  'cordis/request-run-resolved',
+])
 
 /** A string that must appear exactly `count` times once the rescope has run. */
 interface PostCondition {
@@ -507,11 +532,30 @@ function skipped(file: string, pattern: Pattern): boolean {
   return GENERIC_SKIPS.some(skip => skip.file === file && skip.upstream.includes(pattern.upstream))
 }
 
+/**
+ * Decide whether one matched token is a Harness runtime id in the forward mapping.
+ *
+ * Generated catalog signatures escape their closing quote, so the regex includes
+ * that backslash in `subpath`; it is removed only for this identity comparison.
+ * @param from - Name matched in the current mapping direction.
+ * @param upstream - Original upstream package name.
+ * @param subpath - Optional slash suffix captured with the matched name.
+ * @returns Whether the exact forward token must remain unchanged.
+ */
+export function isForwardRuntimeIdentifier(from: string, upstream: string, subpath: string): boolean {
+  if (from !== upstream) return false
+  const comparableSubpath = subpath.endsWith('\\') ? subpath.slice(0, -1) : subpath
+  return FORWARD_RUNTIME_IDENTIFIERS.has(`${from}${comparableSubpath}`)
+}
+
 function rewriteLine(line: string, file: string, all: readonly Pattern[]): string {
   let out = line
   for (const pattern of all) {
     if (skipped(file, pattern)) continue
-    out = out.replace(pattern.token, (_match, quote: string, subpath: string) => `${quote}${pattern.to}${subpath}${quote}`)
+    out = out.replace(pattern.token, (match, quote: string, subpath: string) =>
+      isForwardRuntimeIdentifier(pattern.from, pattern.upstream, subpath)
+        ? match
+        : `${quote}${pattern.to}${subpath}${quote}`)
     out = out.replace(pattern.yamlName, (_match, prefix: string, suffix: string) => `${prefix}${pattern.to}${suffix}`)
   }
   return out

@@ -36,6 +36,52 @@ describe('SessionLogDownloadController', () => {
     })
   })
 
+  it('uses the desktop save dialog without opening an application URL', async () => {
+    const fetcher = vi.fn(async () => new Response('unused'))
+    const save = vi.fn()
+    const desktopSave = vi.fn<(url: string, filename: string) => Promise<boolean>>(async () => true)
+    const controller = new SessionLogDownloadController(fetcher, save, desktopSave)
+
+    await controller.download(SID)
+
+    expect(desktopSave).toHaveBeenCalledOnce()
+    const call = desktopSave.mock.calls[0]
+    if (call === undefined) throw new Error('desktop save was not called')
+    const [url, filename] = call
+    expect(new URL(url).pathname).toBe('/api/session.export')
+    expect(filename).toBe('dsh-session-session-export-controller.zip')
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
+    expect(controller.store.getSnapshot().bySession[SID]).toEqual({
+      open: true, status: 'success', error: null,
+    })
+  })
+
+  it('closes the desktop dialog state when the save dialog is cancelled', async () => {
+    const desktopSave = vi.fn(async () => false)
+    const controller = new SessionLogDownloadController(vi.fn(), vi.fn(), desktopSave)
+
+    await controller.download(SID)
+
+    expect(controller.store.getSnapshot().bySession[SID]).toEqual({
+      open: false, status: 'success', error: null,
+    })
+  })
+
+  it('selects and validates the isolated desktop bridge by default', async () => {
+    const saveDownload = vi.fn(async () => true)
+    vi.stubGlobal('__DSH_DESKTOP__', { saveDownload })
+    const controller = new SessionLogDownloadController(vi.fn(), vi.fn())
+
+    await controller.download(SID)
+
+    expect(saveDownload).toHaveBeenCalledOnce()
+    vi.stubGlobal('__DSH_DESKTOP__', {})
+    expect(() => new SessionLogDownloadController()).toThrow(
+      'session-log-download: desktop bridge must provide saveDownload',
+    )
+  })
+
   it('collapses concurrent gestures and preserves a dismissed dialog', async () => {
     const response = Promise.withResolvers<Response>()
     const fetcher = vi.fn(() => response.promise)
